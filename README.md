@@ -29,6 +29,13 @@ Working now:
 - Local image processing in a background Dart isolate.
 - Runtime resizing, muted palette mapping, grain, edge accents, color
   quantization, and Floyd–Steinberg dithering.
+- Server-driven gallery: the photo list, originals, and treated variants are
+  fetched from the Keep server (`/photos` and `/photos/{id}/...`) and cached on
+  the phone for offline viewing.
+- Uploads send the original to the server, which generates the treated variant;
+  the gallery and `/view` refresh automatically. Deleting a photo removes it from
+  the server and every device.
+- Syncing, uploading, and deleting show visible spinners and toast feedback.
 - Tested on the Pixel 9 emulator and a real Pixel 6a.
 
 The server, physical capture button, microSD queue, second board, and e-ink
@@ -105,14 +112,20 @@ firmware/
 
 ## Flutter app
 
-From `app/`:
+The app talks to a Keep server over HTTP. It ships with the production URL as a
+default; the access token is compiled in at build time too:
 
 ```bash
 flutter pub get
 flutter analyze
 flutter test
-flutter build apk --release
+flutter build apk --release \
+  --dart-define=KEEP_SERVER_URL=http://144.217.6.112:8400 \
+  --dart-define=KEEP_SERVER_TOKEN=<your-bearer-token>
 ```
+
+The URL and token can also be changed per-device in **Settings → Server**
+(they are stored in secure storage).
 
 Install on the Pixel 9 emulator:
 
@@ -126,6 +139,30 @@ Install on a connected Android phone:
 flutter devices
 flutter install -d <device-id>
 ```
+
+## Keep server
+
+The server is a FastAPI app (`server/app.py`) served by `uvicorn` on port 8400
+behind a systemd unit (`keep.service`). State lives in `data/`:
+
+- `data/originals/`, `data/processed/`, `data/frames/`, `data/index.json`
+- Token is read from `KEEP_TOKEN` in the service `.env` (default `dev-token`).
+
+Routes (Bearer token required unless noted):
+
+```text
+POST   /upload              Auth. Upload original; server runs the e-ink treatment.
+GET    /photos              Auth. List of moments (newest first).
+GET    /photos/{id}         Auth. One moment record.
+GET    /photos/{id}/original.jpg   Original bytes (public).
+GET    /photos/{id}/processed.png  Treated bytes (public).
+GET    /view                Latest processed image as a standalone page
+                           (auto-refreshes every 10s).
+DELETE /photos/{id}         Auth. Remove a moment and its files.
+```
+
+`/view` is the recipient's "latest photo" feed. It refreshes automatically as
+photos are uploaded or deleted.
 
 ## XIAO firmware
 

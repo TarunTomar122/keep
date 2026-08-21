@@ -5,23 +5,26 @@ import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:forui/forui.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:multicast_dns/multicast_dns.dart';
 import 'package:path_provider/path_provider.dart';
 
+import 'design/oa.dart';
 import 'image_processor.dart';
+import 'keep_server.dart';
 import 'mjpeg_stream.dart';
 
 typedef PhonePhotoPicker = Future<Uint8List?> Function();
 typedef ImageProcessor = Future<Uint8List> Function(Uint8List input);
+typedef PhotoSubmitter = Future<ProcessedPhoto> Function(Uint8List input);
 
-const _ink = Color(0xFF2B2823);
-const _softSurface = Color(0xFFEDE7DC);
-const _muted = Color(0xFF746D62);
-const _burgundy = Color(0xFF786550);
-const _page = Color(0xFFF7F2E8);
+class ProcessedPhoto {
+  const ProcessedPhoto({required this.bytes, this.remoteId});
+
+  final Uint8List bytes;
+  final String? remoteId;
+}
 
 Future<Uint8List?> pickPhonePhoto() async {
   try {
@@ -30,7 +33,7 @@ Future<Uint8List?> pickPhonePhoto() async {
       maxWidth: 1600,
       imageQuality: 88,
     );
-    return file?.readAsBytes();
+    return file == null ? null : await file.readAsBytes();
   } catch (_) {
     return null;
   }
@@ -45,56 +48,34 @@ class ClippyCompanionApp extends StatelessWidget {
     this.probeDevice = true,
     this.phonePhotoPicker,
     this.imageProcessor,
+    this.serverConfig,
+    this.photoSubmitter,
     super.key,
   });
 
   final bool probeDevice;
   final PhonePhotoPicker? phonePhotoPicker;
   final ImageProcessor? imageProcessor;
+  final ServerConfig? serverConfig;
+  final PhotoSubmitter? photoSubmitter;
 
   @override
   Widget build(BuildContext context) {
-    return MaterialApp(
-      debugShowCheckedModeBanner: false,
-      title: 'Clippy',
-      theme: ThemeData(
-        useMaterial3: true,
-        scaffoldBackgroundColor: _page,
-        colorScheme: ColorScheme.fromSeed(
-          seedColor: _ink,
-          brightness: Brightness.light,
-          surface: _page,
-        ),
-        fontFamily: 'serif',
-        inputDecorationTheme: InputDecorationTheme(
-          filled: true,
-          fillColor: _softSurface,
-          contentPadding: const EdgeInsets.symmetric(
-            horizontal: 16,
-            vertical: 14,
-          ),
-          border: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(14),
-            borderSide: BorderSide.none,
-          ),
-          enabledBorder: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(14),
-            borderSide: BorderSide.none,
-          ),
-          focusedBorder: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(14),
-            borderSide: const BorderSide(color: _ink, width: 1.2),
-          ),
-          labelStyle: const TextStyle(color: _ink),
-          hintStyle: const TextStyle(color: _muted),
-        ),
+    return AnnotatedRegion<SystemUiOverlayStyle>(
+      value: SystemUiOverlayStyle.dark.copyWith(
+        statusBarColor: Colors.transparent,
       ),
-      builder: (context, child) =>
-          FTheme(data: FTheme.neutral.light.touch, child: child!),
-      home: CompanionShell(
-        probeDevice: probeDevice,
-        phonePhotoPicker: phonePhotoPicker ?? pickPhonePhoto,
-        imageProcessor: imageProcessor ?? const LocalImageProcessor().process,
+      child: MaterialApp(
+        debugShowCheckedModeBanner: false,
+        title: 'Keep',
+        theme: oaTheme(),
+        home: CompanionShell(
+          probeDevice: probeDevice,
+          phonePhotoPicker: phonePhotoPicker ?? pickPhonePhoto,
+          imageProcessor: imageProcessor ?? const LocalImageProcessor().process,
+          serverConfig: serverConfig,
+          photoSubmitter: photoSubmitter,
+        ),
       ),
     );
   }
@@ -105,12 +86,16 @@ class CompanionShell extends StatefulWidget {
     required this.probeDevice,
     required this.phonePhotoPicker,
     required this.imageProcessor,
+    this.serverConfig,
+    this.photoSubmitter,
     super.key,
   });
 
   final bool probeDevice;
   final PhonePhotoPicker phonePhotoPicker;
   final ImageProcessor imageProcessor;
+  final ServerConfig? serverConfig;
+  final PhotoSubmitter? photoSubmitter;
 
   @override
   State<CompanionShell> createState() => _CompanionShellState();
@@ -118,8 +103,17 @@ class CompanionShell extends StatefulWidget {
 
 class _CompanionShellState extends State<CompanionShell> {
   final DeviceController _device = DeviceController();
-  final List<LocalMoment> _moments = _starterMoments();
+  final List<LocalMoment> _moments = [];
   final LocalMomentStore _momentStore = LocalMomentStore();
+  final ServerConfigStore _serverConfigStore = ServerConfigStore();
+  final ServerImageCache _imageCache = ServerImageCache();
+  late ServerConfig _serverConfig = widget.serverConfig ??
+      const ServerConfig(url: kDefaultServerUrl, token: kDefaultServerToken);
+  late final PhotoSubmitter _submitPhoto =
+      widget.photoSubmitter ?? _defaultSubmit;
+  bool _syncing = false;
+  String? _galleryError;
+  final Set<String> _deletingIds = {};
   int _selectedTab = 0;
   bool _openingCamera = false;
 
@@ -127,7 +121,8 @@ class _CompanionShellState extends State<CompanionShell> {
   void initState() {
     super.initState();
     _device.addListener(_refresh);
-    unawaited(_restoreMoments());
+    if (widget.serverConfig == null) unawaited(_restoreServerConfig());
+    unawaited(_initialLoad());
     if (widget.probeDevice) unawaited(_device.probeConnection());
   }
 
@@ -141,37 +136,82 @@ class _CompanionShellState extends State<CompanionShell> {
 
   void _refresh() => setState(() {});
 
-  Future<void> _restoreMoments() async {
+  Future<void> _restoreServerConfig() async {
+    final config = await _serverConfigStore.load();
+    if (!mounted) return;
+    setState(() => _serverConfig = config);
+    unawaited(_syncFromServer());
+  }
+
+  Future<void> _saveServerConfig(ServerConfig config) async {
+    _serverConfig = config;
+    try {
+      await _serverConfigStore.save(config);
+    } catch (_) {}
+    unawaited(_syncFromServer());
+  }
+
+  Future<void> _initialLoad() async {
     try {
       final stored = await _momentStore.load();
-      if (!mounted) return;
-      final hasLegacyDemos = stored.any(
-        (moment) =>
-            moment.id.startsWith('demo-') &&
-            !_currentDemoIds.contains(moment.id),
-      );
-      if (stored.isEmpty || hasLegacyDemos) {
-        final prepared = await _prepareDemoMoments(_starterMoments());
-        final captured = stored
-            .where((moment) => !moment.id.startsWith('demo-'))
-            .toList();
-        if (!mounted) return;
-        setState(() {
-          _moments
-            ..clear()
-            ..addAll([...prepared, ...captured]);
-        });
-        await _momentStore.save(_moments);
-        return;
+      if (!mounted || stored.isEmpty) return;
+      setState(() => _moments.addAll(stored));
+    } catch (_) {}
+    await _syncFromServer();
+  }
+
+  bool get _serverReady => _serverConfig.isConfigured;
+
+  Future<void> _syncFromServer() async {
+    if (_syncing || !_serverReady) return;
+    _syncing = true;
+    if (mounted) setState(() => _galleryError = null);
+    try {
+      final client = KeepServerClient(config: _serverConfig);
+      final remote = await client.listPhotos();
+      final synced = <LocalMoment>[];
+      for (final moment in remote) {
+        synced.add(await _loadRemoteMoment(client, moment));
       }
+      if (!mounted) return;
       setState(() {
         _moments
           ..clear()
-          ..addAll(stored);
+          ..addAll(synced);
       });
+      await _momentStore.save(_moments);
     } catch (_) {
-      // The bundled demo moments remain available if local storage is unavailable.
+      if (mounted && _galleryError == null) {
+        setState(() => _galleryError = 'Could not reach the server.');
+      }
+    } finally {
+      _syncing = false;
+      if (mounted) setState(() {});
     }
+  }
+
+  Future<LocalMoment> _loadRemoteMoment(
+    KeepServerClient client,
+    RemoteMoment moment,
+  ) async {
+    final processedKey = '${moment.id}-treated.png';
+    var treatedPath = await _imageCache.pathFor(processedKey);
+    if (treatedPath == null) {
+      try {
+        treatedPath = await _imageCache.put(
+          processedKey,
+          await client.fetchBytes(moment.processedUrl),
+        );
+      } catch (_) {
+        treatedPath = null;
+      }
+    }
+    return LocalMoment(
+      id: moment.id,
+      capturedAt: moment.createdAt,
+      treatedPath: treatedPath,
+      remoteId: moment.id,
+    );
   }
 
   void _persistMoments() => unawaited(_saveMoments());
@@ -179,49 +219,27 @@ class _CompanionShellState extends State<CompanionShell> {
   Future<void> _saveMoments() async {
     try {
       await _momentStore.save(_moments);
-    } catch (_) {
-      // The gallery remains usable when local storage is unavailable.
-    }
+    } catch (_) {}
   }
 
-  Future<Uint8List> _treat(Uint8List bytes) async {
+  Future<ProcessedPhoto> _defaultSubmit(Uint8List bytes) async {
+    if (_serverReady) {
+      final uploaded =
+          await KeepServerClient(config: _serverConfig).upload(bytes);
+      return ProcessedPhoto(
+        bytes: uploaded.processedBytes,
+        remoteId: uploaded.id,
+      );
+    }
     try {
-      return await widget.imageProcessor(bytes);
+      return ProcessedPhoto(bytes: await widget.imageProcessor(bytes));
     } catch (_) {
-      return bytes;
+      return ProcessedPhoto(bytes: bytes);
     }
-  }
-
-  Future<List<LocalMoment>> _prepareDemoMoments(
-    List<LocalMoment> moments,
-  ) async {
-    final prepared = <LocalMoment>[];
-    for (final moment in moments) {
-      final asset = moment.originalAsset;
-      if (asset == null || moment.treatedBytes != null) {
-        prepared.add(moment);
-        continue;
-      }
-      final source = await rootBundle.load(asset);
-      final originalBytes = source.buffer.asUint8List(
-        source.offsetInBytes,
-        source.lengthInBytes,
-      );
-      prepared.add(
-        LocalMoment(
-          id: moment.id,
-          capturedAt: moment.capturedAt,
-          originalBytes: originalBytes,
-          treatedBytes: await _treat(originalBytes),
-          originalAsset: asset,
-        ),
-      );
-    }
-    return prepared;
   }
 
   Future<void> _takePhonePhoto() async {
-    if (_openingCamera) return;
+    if (_openingCamera || _syncing) return;
     setState(() => _openingCamera = true);
     try {
       final imageBytes = await widget.phonePhotoPicker();
@@ -229,22 +247,34 @@ class _CompanionShellState extends State<CompanionShell> {
         if (mounted) setState(() => _openingCamera = false);
         return;
       }
-      final treatedBytes = await _treat(imageBytes);
+      final treated = await _submitPhoto(imageBytes);
       if (!mounted) return;
       setState(() {
-        _openingCamera = false;
         _moments.insert(
           0,
           LocalMoment(
-            id: 'phone-${DateTime.now().microsecondsSinceEpoch}',
+            id: treated.remoteId ??
+                'phone-${DateTime.now().microsecondsSinceEpoch}',
             originalBytes: imageBytes,
-            treatedBytes: treatedBytes,
+            treatedBytes: treated.bytes,
+            remoteId: treated.remoteId,
             capturedAt: DateTime.now(),
           ),
         );
       });
       _persistMoments();
+      await _syncFromServer();
     } catch (_) {
+      if (mounted) {
+        OaToast.show(
+          context,
+          good: false,
+          message: _serverReady
+              ? 'Upload failed — check the server in Settings.'
+              : 'Could not process the photo.',
+        );
+      }
+    } finally {
       if (mounted) setState(() => _openingCamera = false);
     }
   }
@@ -252,21 +282,36 @@ class _CompanionShellState extends State<CompanionShell> {
   Future<bool> _captureBoardPhoto() async {
     final imageBytes = await _device.capturePhoto();
     if (!mounted || imageBytes == null) return false;
-    final treatedBytes = await _treat(imageBytes);
-    if (!mounted) return false;
-    setState(() {
-      _moments.insert(
-        0,
-        LocalMoment(
-          id: 'xiao-${DateTime.now().microsecondsSinceEpoch}',
-          originalBytes: imageBytes,
-          treatedBytes: treatedBytes,
-          capturedAt: DateTime.now(),
-        ),
-      );
-    });
-    _persistMoments();
-    return true;
+    try {
+      final treated = await _submitPhoto(imageBytes);
+      if (!mounted) return false;
+      setState(() {
+        _moments.insert(
+          0,
+          LocalMoment(
+            id: treated.remoteId ?? 'xiao-${DateTime.now().microsecondsSinceEpoch}',
+            originalBytes: imageBytes,
+            treatedBytes: treated.bytes,
+            remoteId: treated.remoteId,
+            capturedAt: DateTime.now(),
+          ),
+        );
+      });
+      _persistMoments();
+      await _syncFromServer();
+      return true;
+    } catch (_) {
+      if (mounted) {
+        OaToast.show(
+          context,
+          good: false,
+          message: _serverReady
+              ? 'Upload failed — check the server in Settings.'
+              : 'Could not process the photo.',
+        );
+      }
+      return false;
+    }
   }
 
   Future<void> _openMoment(LocalMoment moment) async {
@@ -274,6 +319,30 @@ class _CompanionShellState extends State<CompanionShell> {
       MaterialPageRoute<bool>(builder: (_) => MomentDetailPage(moment: moment)),
     );
     if (deleted != true || !mounted) return;
+    final remoteId = moment.remoteId;
+    if (remoteId != null && _serverReady) {
+      setState(() => _deletingIds.add(remoteId));
+      try {
+        await KeepServerClient(config: _serverConfig).deletePhoto(remoteId);
+      } catch (_) {
+        if (!mounted) return;
+        setState(() => _deletingIds.remove(remoteId));
+        OaToast.show(
+          context,
+          good: false,
+          message: 'Could not delete on the server.',
+        );
+        return;
+      }
+      if (!mounted) return;
+      setState(() {
+        _deletingIds.remove(remoteId);
+        _moments.removeWhere((item) => item.id == moment.id);
+      });
+      await _imageCache.removeForId(remoteId);
+      await _momentStore.delete(moment, _moments);
+      return;
+    }
     setState(() => _moments.removeWhere((item) => item.id == moment.id));
     await _momentStore.delete(moment, _moments);
   }
@@ -283,57 +352,69 @@ class _CompanionShellState extends State<CompanionShell> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: _page,
-      extendBody: true,
+      backgroundColor: Colors.white,
       body: SafeArea(
         bottom: false,
-        child: SizedBox.expand(
-          child: IndexedStack(
-            sizing: StackFit.expand,
-            index: _selectedTab,
-            children: [
-              HomeView(
-                moments: _moments,
-                openingCamera: _openingCamera,
-                onAddPhoto: _takePhonePhoto,
-                onSettings: () => _selectTab(1),
-                onOpenMoment: _openMoment,
-              ),
-              SettingsView(
-                device: _device,
-                isActive: _selectedTab == 1,
-                onBack: () => _selectTab(0),
-                onCapture: _captureBoardPhoto,
-              ),
-            ],
-          ),
-        ),
-      ),
-      floatingActionButton: _selectedTab == 0
-          ? Padding(
-              padding: const EdgeInsets.only(right: 16, bottom: 32),
-              child: SizedBox(
-                width: 64,
-                height: 64,
-                child: FloatingActionButton(
-                  onPressed: _openingCamera ? null : _takePhonePhoto,
-                  tooltip: 'Take a photo',
-                  backgroundColor: _softSurface,
-                  foregroundColor: _ink,
-                  elevation: 0,
-                  shape: const CircleBorder(),
-                  child: _openingCamera
-                      ? const SizedBox(
-                          width: 24,
-                          height: 24,
-                          child: CircularProgressIndicator(strokeWidth: 2),
-                        )
-                      : const Icon(Icons.add_rounded, size: 32),
+        child: Column(
+          children: [
+            SizedBox(
+              height: 56,
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 16),
+                child: Row(
+                  children: [
+                    const Text(
+                      'Keep',
+                      style: TextStyle(
+                        fontSize: 15,
+                        fontWeight: FontWeight.w500,
+                        letterSpacing: -0.2,
+                        color: Oa.ink,
+                      ),
+                    ),
+                    const Spacer(),
+                    OaIconButton(
+                      icon: Icons.settings_outlined,
+                      tooltip: 'Settings',
+                      onPressed: () => _selectTab(1),
+                    ),
+                  ],
                 ),
               ),
-            )
-          : null,
-      floatingActionButtonLocation: FloatingActionButtonLocation.endFloat,
+            ),
+            Expanded(
+              child: IndexedStack(
+                sizing: StackFit.expand,
+                index: _selectedTab,
+                children: [
+                  HomeView(
+                    moments: _moments,
+                    openingCamera: _openingCamera,
+                    cameraConnected: _device.isConnected,
+                    syncing: _syncing,
+                    galleryError: _galleryError,
+                    serverReady: _serverReady,
+                    deletingIds: _deletingIds,
+                    onRefresh: _syncFromServer,
+                    onAddPhoto: _takePhonePhoto,
+                    onOpenConnection: () => _selectTab(1),
+                    onOpenMoment: _openMoment,
+                  ),
+                  SettingsView(
+                    device: _device,
+                    isActive: _selectedTab == 1,
+                    onBack: () => _selectTab(0),
+                    onCapture: _captureBoardPhoto,
+                    serverConfig: _serverConfig,
+                    onSaveServerConfig: (config) =>
+                        unawaited(_saveServerConfig(config)),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
     );
   }
 }
@@ -342,16 +423,28 @@ class HomeView extends StatelessWidget {
   const HomeView({
     required this.moments,
     required this.openingCamera,
+    required this.cameraConnected,
+    required this.syncing,
+    required this.galleryError,
+    required this.serverReady,
+    required this.deletingIds,
+    required this.onRefresh,
     required this.onAddPhoto,
-    required this.onSettings,
+    required this.onOpenConnection,
     required this.onOpenMoment,
     super.key,
   });
 
   final List<LocalMoment> moments;
   final bool openingCamera;
+  final bool cameraConnected;
+  final bool syncing;
+  final String? galleryError;
+  final bool serverReady;
+  final Set<String> deletingIds;
+  final Future<void> Function() onRefresh;
   final VoidCallback onAddPhoto;
-  final VoidCallback onSettings;
+  final VoidCallback onOpenConnection;
   final ValueChanged<LocalMoment> onOpenMoment;
 
   @override
@@ -362,26 +455,78 @@ class HomeView extends StatelessWidget {
       (index.isEven ? left : right).add(moments[index]);
     }
 
-    return SingleChildScrollView(
-      padding: const EdgeInsets.only(bottom: 104),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Padding(
-            padding: const EdgeInsets.fromLTRB(24, 22, 24, 22),
-            child: _Greeting(onSettings: onSettings),
-          ),
-          if (moments.isEmpty)
-            _EmptyGallery(onAddPhoto: onAddPhoto, openingCamera: openingCamera)
-          else
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 16),
-              child: Row(
+    return RefreshIndicator(
+      color: Oa.ink,
+      backgroundColor: Colors.white,
+      onRefresh: onRefresh,
+      child: SingleChildScrollView(
+        physics: const AlwaysScrollableScrollPhysics(),
+        padding: const EdgeInsets.fromLTRB(16, 8, 16, 104),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                const Text(
+                  'Moments',
+                  style: TextStyle(
+                    fontSize: 20,
+                    fontWeight: FontWeight.w500,
+                    letterSpacing: -0.3,
+                    color: Oa.ink,
+                  ),
+                ),
+                const Spacer(),
+                if (syncing) ...[
+                  const SizedBox(
+                    width: 14,
+                    height: 14,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  ),
+                  const SizedBox(width: 10),
+                ],
+                OaButton(
+                  label: '+ Photo',
+                  tooltip: 'Take a photo',
+                  loading: openingCamera,
+                  onPressed: onAddPhoto,
+                ),
+              ],
+            ),
+            const SizedBox(height: 16),
+            if (!cameraConnected)
+              OaNoticeStrip(
+                claim: 'No camera connected.',
+                sentence: 'Capture from the XIAO once it joins your Wi-Fi.',
+                actionLabel: 'Check connection',
+                onAction: onOpenConnection,
+              ),
+            if (!serverReady && !syncing)
+              OaNoticeStrip(
+                claim: 'Server not set up.',
+                sentence: 'Add the URL and token in Settings to sync photos.',
+                actionLabel: 'Open Settings',
+                onAction: onOpenConnection,
+              )
+            else if (galleryError != null)
+              OaNoticeStrip(
+                claim: galleryError!,
+                sentence: 'Showing photos from the last successful sync.',
+                actionLabel: 'Retry',
+                onAction: () => onRefresh(),
+              ),
+            if (moments.isEmpty)
+              syncing
+                  ? const _GallerySkeleton()
+                  : _EmptyGallery(onAddPhoto: onAddPhoto)
+            else ...[
+              Row(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Expanded(
                     child: _GalleryColumn(
                       moments: left,
+                      deletingIds: deletingIds,
                       onOpenMoment: onOpenMoment,
                     ),
                   ),
@@ -389,53 +534,24 @@ class HomeView extends StatelessWidget {
                   Expanded(
                     child: _GalleryColumn(
                       moments: right,
+                      deletingIds: deletingIds,
                       onOpenMoment: onOpenMoment,
                     ),
                   ),
                 ],
               ),
-            ),
-        ],
+            ],
+          ],
+        ),
       ),
     );
   }
 }
 
-class _Greeting extends StatelessWidget {
-  const _Greeting({required this.onSettings});
-
-  final VoidCallback onSettings;
-
-  @override
-  Widget build(BuildContext context) {
-    return Row(
-      children: [
-        const Expanded(
-          child: Text(
-            'Hi, Tarun',
-            style: TextStyle(
-              color: _ink,
-              fontSize: 30,
-              fontWeight: FontWeight.w800,
-              letterSpacing: -1,
-            ),
-          ),
-        ),
-        IconButton(
-          onPressed: onSettings,
-          tooltip: 'Settings',
-          icon: const Icon(Icons.settings_outlined, color: _ink, size: 28),
-        ),
-      ],
-    );
-  }
-}
-
 class _EmptyGallery extends StatelessWidget {
-  const _EmptyGallery({required this.onAddPhoto, required this.openingCamera});
+  const _EmptyGallery({required this.onAddPhoto});
 
   final VoidCallback onAddPhoto;
-  final bool openingCamera;
 
   @override
   Widget build(BuildContext context) {
@@ -444,23 +560,24 @@ class _EmptyGallery extends StatelessWidget {
       child: Center(
         child: Column(
           children: [
-            const Icon(Icons.photo_library_outlined, size: 42, color: _ink),
-            const SizedBox(height: 16),
             const Text(
-              'No photos yet',
-              style: TextStyle(fontSize: 20, fontWeight: FontWeight.w800),
+              'No photos yet.',
+              style: TextStyle(
+                fontSize: 16,
+                fontWeight: FontWeight.w500,
+                color: Oa.ink,
+              ),
             ),
             const SizedBox(height: 6),
             const Text(
               'Take the first one from your phone.',
               textAlign: TextAlign.center,
-              style: TextStyle(color: _muted),
+              style: TextStyle(fontSize: 13, color: Oa.mutedFg),
             ),
             const SizedBox(height: 20),
-            OutlinedButton.icon(
-              onPressed: openingCamera ? null : onAddPhoto,
-              icon: const Icon(Icons.add_rounded),
-              label: const Text('Take a photo'),
+            OaButton(
+              label: 'Take a photo',
+              onPressed: onAddPhoto,
             ),
           ],
         ),
@@ -470,9 +587,14 @@ class _EmptyGallery extends StatelessWidget {
 }
 
 class _GalleryColumn extends StatelessWidget {
-  const _GalleryColumn({required this.moments, required this.onOpenMoment});
+  const _GalleryColumn({
+    required this.moments,
+    required this.deletingIds,
+    required this.onOpenMoment,
+  });
 
   final List<LocalMoment> moments;
+  final Set<String> deletingIds;
   final ValueChanged<LocalMoment> onOpenMoment;
 
   @override
@@ -480,8 +602,12 @@ class _GalleryColumn extends StatelessWidget {
     return Column(
       children: [
         for (final moment in moments) ...[
-          _GalleryTile(moment: moment, onTap: () => onOpenMoment(moment)),
-          const SizedBox(height: 16),
+          _GalleryTile(
+            moment: moment,
+            deleting: deletingIds.contains(moment.remoteId ?? moment.id),
+            onTap: () => onOpenMoment(moment),
+          ),
+          const SizedBox(height: 12),
         ],
       ],
     );
@@ -489,9 +615,14 @@ class _GalleryColumn extends StatelessWidget {
 }
 
 class _GalleryTile extends StatelessWidget {
-  const _GalleryTile({required this.moment, required this.onTap});
+  const _GalleryTile({
+    required this.moment,
+    required this.deleting,
+    required this.onTap,
+  });
 
   final LocalMoment moment;
+  final bool deleting;
   final VoidCallback onTap;
 
   @override
@@ -501,15 +632,82 @@ class _GalleryTile extends StatelessWidget {
       button: true,
       image: true,
       child: GestureDetector(
-        onTap: onTap,
-        child: ClipRRect(
-          borderRadius: BorderRadius.circular(8),
-          child: AspectRatio(
-            aspectRatio: 0.78,
-            child: _MomentVisual(moment: moment),
+        onTap: deleting ? null : onTap,
+        child: Container(
+          decoration: ShapeDecoration(
+            color: Oa.card,
+            shadows: Oa.restingShadows,
+            shape: const SquircleBorder(side: BorderSide(color: Oa.border)),
+          ),
+          padding: const EdgeInsets.all(4),
+          child: ClipPath(
+            clipper: const OaSquircleClipper(),
+            child: AspectRatio(
+              aspectRatio: 0.78,
+              child: Stack(
+                alignment: Alignment.center,
+                children: [
+                  _MomentVisual(moment: moment),
+                  if (deleting) ...[
+                    const Positioned.fill(
+                      child: ColoredBox(
+                        color: Color(0xA6FFFFFF),
+                      ),
+                    ),
+                    const SizedBox(
+                      width: 26,
+                      height: 26,
+                      child: CircularProgressIndicator(strokeWidth: 2.4),
+                    ),
+                  ],
+                ],
+              ),
+            ),
           ),
         ),
       ),
+    );
+  }
+}
+
+class _GallerySkeleton extends StatelessWidget {
+  const _GallerySkeleton();
+
+  @override
+  Widget build(BuildContext context) {
+    Widget tile() => AspectRatio(
+          aspectRatio: 0.78,
+          child: DecoratedBox(
+            decoration: ShapeDecoration(
+              color: Oa.card,
+              shape: const SquircleBorder(side: BorderSide(color: Oa.border)),
+            ),
+          ),
+        );
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Expanded(
+          child: Column(
+            children: [
+              tile(),
+              const SizedBox(height: 12),
+              tile(),
+            ],
+          ),
+        ),
+        const SizedBox(width: 12),
+        Expanded(
+          child: Column(
+            children: [
+              const SizedBox(height: 48),
+              tile(),
+              const SizedBox(height: 12),
+              tile(),
+            ],
+          ),
+        ),
+      ],
     );
   }
 }
@@ -520,6 +718,8 @@ class SettingsView extends StatefulWidget {
     required this.isActive,
     required this.onBack,
     required this.onCapture,
+    required this.serverConfig,
+    required this.onSaveServerConfig,
     super.key,
   });
 
@@ -527,6 +727,8 @@ class SettingsView extends StatefulWidget {
   final bool isActive;
   final VoidCallback onBack;
   final Future<bool> Function() onCapture;
+  final ServerConfig serverConfig;
+  final ValueChanged<ServerConfig> onSaveServerConfig;
 
   @override
   State<SettingsView> createState() => _SettingsViewState();
@@ -539,11 +741,13 @@ class _SettingsViewState extends State<SettingsView> {
   final _wifiName = TextEditingController();
   final _wifiPassword = TextEditingController();
   final _serverUrl = TextEditingController();
+  final _serverToken = TextEditingController();
   final _wifiStorage = FlutterSecureStorage();
   bool _wifiSaved = false;
   bool _wifiSaving = false;
   bool _wifiResetting = false;
   String? _wifiMessage;
+  bool? _wifiGood;
   bool _serverSaved = false;
   bool _liveCapture = false;
   bool _capturing = false;
@@ -553,12 +757,15 @@ class _SettingsViewState extends State<SettingsView> {
     _wifiName.dispose();
     _wifiPassword.dispose();
     _serverUrl.dispose();
+    _serverToken.dispose();
     super.dispose();
   }
 
   @override
   void initState() {
     super.initState();
+    _serverUrl.text = widget.serverConfig.url;
+    _serverToken.text = widget.serverConfig.token;
     unawaited(_restoreWifiCredentials());
   }
 
@@ -572,236 +779,347 @@ class _SettingsViewState extends State<SettingsView> {
       _wifiName.text = values[0] ?? '';
       _wifiPassword.text = values[1] ?? '';
       setState(() {});
-    } catch (_) {
-      // The fields remain usable even if secure storage is unavailable.
-    }
+    } catch (_) {}
   }
 
   @override
   Widget build(BuildContext context) {
     final connected = widget.device.isConnected;
     return SingleChildScrollView(
-      padding: const EdgeInsets.fromLTRB(24, 22, 24, 104),
+      padding: const EdgeInsets.fromLTRB(16, 8, 16, 104),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(
             children: [
-              IconButton(
-                onPressed: widget.onBack,
+              OaIconButton(
+                icon: Icons.arrow_back_outlined,
                 tooltip: 'Back to Home',
-                icon: const Icon(Icons.arrow_back_rounded, color: _ink),
+                onPressed: widget.onBack,
               ),
               const SizedBox(width: 4),
               const Text(
                 'Settings',
                 style: TextStyle(
-                  color: _ink,
-                  fontSize: 32,
-                  fontWeight: FontWeight.w800,
-                  letterSpacing: -1,
+                  fontSize: 20,
+                  fontWeight: FontWeight.w500,
+                  letterSpacing: -0.3,
+                  color: Oa.ink,
                 ),
               ),
             ],
           ),
-          const SizedBox(height: 28),
-          const _SectionLabel('Device'),
+          const SizedBox(height: 24),
+          const OaSectionHeading('Device', 'The keychain camera and its live feed.'),
           const SizedBox(height: 10),
-          _OutlinedPanel(
-            child: _SettingRow(
-              icon: Icons.camera_alt_outlined,
-              title: 'Keychain camera',
-              detail: connected
-                  ? '${widget.device.connectionMode == 'station' ? 'Wi-Fi' : 'Setup hotspot'} · ${widget.device.ipAddress ?? 'connected'}'
-                  : 'No XIAO connection found',
-              trailing: Text(
-                connected ? 'ONLINE' : 'OFFLINE',
-                style: TextStyle(
-                  color: connected ? _ink : _burgundy,
-                  fontSize: 11,
-                  fontWeight: FontWeight.w800,
-                  letterSpacing: 0.8,
+          OaPanel(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Container(
+                      width: 8,
+                      height: 8,
+                      decoration: ShapeDecoration(
+                        color: connected ? Oa.successText : Oa.dangerText,
+                        shape: const CircleBorder(),
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Text(
+                            'Keychain camera',
+                            style: TextStyle(
+                              fontSize: 14,
+                              fontWeight: FontWeight.w500,
+                              color: Oa.fg80,
+                            ),
+                          ),
+                          const SizedBox(height: 2),
+                          Text(
+                            connected
+                                ? '${widget.device.connectionMode == 'station' ? 'Wi-Fi' : 'Setup hotspot'} · ${widget.device.ipAddress ?? 'connected'}'
+                                : 'No XIAO connection found',
+                            style: const TextStyle(
+                              fontSize: 12,
+                              color: Oa.mutedFg,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    Text(
+                      connected ? 'ONLINE' : 'OFFLINE',
+                      style: TextStyle(
+                        fontSize: 11,
+                        fontWeight: FontWeight.w500,
+                        letterSpacing: 0.5,
+                        color: connected ? Oa.successText : Oa.dangerText,
+                      ),
+                    ),
+                  ],
                 ),
-              ),
-            ),
-          ),
-          const SizedBox(height: 10),
-          SizedBox(
-            width: double.infinity,
-            child: FilledButton.tonal(
-              onPressed: () => unawaited(widget.device.probeConnection()),
-              style: _softButtonStyle(),
-              child: Text(connected ? 'Check again' : 'Check connection'),
-            ),
-          ),
-          const SizedBox(height: 24),
-          _OutlinedPanel(
-            child: SwitchListTile.adaptive(
-              contentPadding: EdgeInsets.zero,
-              value: _liveCapture,
-              onChanged: (value) => setState(() => _liveCapture = value),
-              title: const Text(
-                'Live capture mode',
-                style: TextStyle(fontWeight: FontWeight.w800),
-              ),
-              subtitle: Text(
-                connected
-                    ? 'Show the XIAO camera feed while enabled.'
-                    : 'Connect the board to preview its camera here.',
-              ),
-            ),
-          ),
-          if (_liveCapture && connected && widget.isActive) ...[
-            const SizedBox(height: 10),
-            _LivePreview(url: widget.device.streamUrl),
-          ],
-          if (connected && widget.isActive) ...[
-            const SizedBox(height: 12),
-            SizedBox(
-              width: double.infinity,
-              child: FilledButton.icon(
-                onPressed: _capturing ? null : _capturePhoto,
-                style: _softButtonStyle(),
-                icon: const Icon(Icons.camera_alt_outlined),
-                label: Text(_capturing ? 'Capturing…' : 'Take photo from XIAO'),
-              ),
-            ),
-          ],
-          const SizedBox(height: 24),
-          const _SectionLabel('Battery'),
-          const SizedBox(height: 10),
-          const _OutlinedPanel(
-            child: _SettingRow(
-              icon: Icons.battery_unknown_outlined,
-              title: 'Board battery',
-              detail: 'No voltage sensor or battery gauge is connected yet.',
-              trailing: Text(
-                'UNAVAILABLE',
-                style: TextStyle(
-                  color: _burgundy,
-                  fontSize: 11,
-                  fontWeight: FontWeight.w800,
-                  letterSpacing: 0.8,
+                const SizedBox(height: 12),
+                OaButton(
+                  label: connected ? 'Check again' : 'Check connection',
+                  variant: OaButtonVariant.secondary,
+                  expand: true,
+                  onPressed: () => unawaited(widget.device.probeConnection()),
                 ),
-              ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 12),
+          OaPanel(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    const Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            'Live capture mode',
+                            style: TextStyle(
+                              fontSize: 14,
+                              fontWeight: FontWeight.w500,
+                              color: Oa.fg80,
+                            ),
+                          ),
+                          SizedBox(height: 2),
+                          Text(
+                            'Show the XIAO camera feed while enabled.',
+                            style: TextStyle(fontSize: 12, color: Oa.mutedFg),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    OaSwitch(
+                      value: _liveCapture,
+                      onChanged: (value) =>
+                          setState(() => _liveCapture = value),
+                    ),
+                  ],
+                ),
+                if (_liveCapture && connected && widget.isActive) ...[
+                  const SizedBox(height: 12),
+                  _LivePreview(url: widget.device.streamUrl),
+                ],
+                if (connected && widget.isActive) ...[
+                  const SizedBox(height: 12),
+                  OaButton(
+                    label: 'Take photo from XIAO',
+                    loading: _capturing,
+                    expand: true,
+                    onPressed: _capturing ? null : _capturePhoto,
+                  ),
+                ],
+              ],
             ),
           ),
           const SizedBox(height: 24),
-          const _SectionLabel('Board Wi-Fi'),
+          const OaSectionHeading('Battery', 'Board power reporting is not wired up yet.'),
           const SizedBox(height: 10),
-          TextField(
-            controller: _wifiName,
-            decoration: const InputDecoration(
-              labelText: 'Wi-Fi network',
-              hintText: 'Network name',
-            ),
-            onChanged: (_) => setState(() {
-              _wifiSaved = false;
-              _wifiMessage = null;
-            }),
-          ),
-          const SizedBox(height: 10),
-          TextField(
-            controller: _wifiPassword,
-            decoration: const InputDecoration(
-              labelText: 'Wi-Fi password',
-              hintText: 'Password',
-            ),
-            onChanged: (_) => setState(() {
-              _wifiSaved = false;
-              _wifiMessage = null;
-            }),
-          ),
-          const SizedBox(height: 10),
-          SizedBox(
-            width: double.infinity,
-            child: FilledButton.tonal(
-              onPressed: _wifiName.text.trim().isEmpty || _wifiSaving
-                  ? null
-                  : _saveWifi,
-              style: _softButtonStyle(),
-              child: Text(
-                _wifiSaving
-                    ? 'Saving to board…'
-                    : _wifiSaved
-                    ? 'Saved on board'
-                    : 'Save Wi-Fi details',
-              ),
+          const OaPanel(
+            child: Row(
+              children: [
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'Board battery',
+                        style: TextStyle(
+                          fontSize: 14,
+                          fontWeight: FontWeight.w500,
+                          color: Oa.fg80,
+                        ),
+                      ),
+                      SizedBox(height: 2),
+                      Text(
+                        'No voltage sensor or battery gauge is connected yet.',
+                        style: TextStyle(fontSize: 12, color: Oa.mutedFg),
+                      ),
+                    ],
+                  ),
+                ),
+                Text(
+                  'UNAVAILABLE',
+                  style: TextStyle(
+                    fontSize: 11,
+                    fontWeight: FontWeight.w500,
+                    letterSpacing: 0.5,
+                    color: Oa.mutedFg,
+                  ),
+                ),
+              ],
             ),
           ),
+          const SizedBox(height: 24),
+          const OaSectionHeading('Board Wi-Fi', 'Provision the board onto your home network.'),
+          const SizedBox(height: 10),
           if (_wifiMessage != null) ...[
-            const SizedBox(height: 8),
-            Text(
-              _wifiMessage!,
-              style: TextStyle(
-                color: _wifiSaved ? _ink : _burgundy,
-                fontWeight: FontWeight.w700,
-              ),
+            OaNoticeStrip(
+              claim: _wifiMessage!,
+              sentence: _wifiSentence,
             ),
+            const SizedBox(height: 10),
           ],
-          const SizedBox(height: 10),
-          SizedBox(
-            width: double.infinity,
-            child: OutlinedButton.icon(
-              onPressed: !connected || _wifiSaving || _wifiResetting
-                  ? null
-                  : _resetWifi,
-              icon: _wifiResetting
-                  ? const SizedBox(
-                      width: 18,
-                      height: 18,
-                      child: CircularProgressIndicator(strokeWidth: 2),
-                    )
-                  : const Icon(Icons.restart_alt_rounded),
-              label: Text(
-                _wifiResetting ? 'Resetting board Wi-Fi…' : 'Reset board Wi-Fi',
-              ),
-              style: OutlinedButton.styleFrom(
-                foregroundColor: _burgundy,
-                minimumSize: const Size.fromHeight(48),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(14),
+          OaPanel(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                TextField(
+                  controller: _wifiName,
+                  decoration: const InputDecoration(
+                    labelText: 'Wi-Fi network',
+                    hintText: 'Network name',
+                  ),
+                  onChanged: (_) => setState(() {
+                    _wifiSaved = false;
+                    _wifiMessage = null;
+                  }),
                 ),
-              ),
+                const SizedBox(height: 10),
+                TextField(
+                  controller: _wifiPassword,
+                  obscureText: true,
+                  decoration: const InputDecoration(
+                    labelText: 'Wi-Fi password',
+                    hintText: 'Password',
+                  ),
+                  onChanged: (_) => setState(() {
+                    _wifiSaved = false;
+                    _wifiMessage = null;
+                  }),
+                ),
+                const SizedBox(height: 12),
+                OaButton(
+                  label: _wifiSaving
+                      ? 'Saving to board…'
+                      : _wifiSaved
+                          ? 'Saved on board'
+                          : 'Save Wi-Fi details',
+                  loading: _wifiSaving,
+                  expand: true,
+                  onPressed:
+                      _wifiName.text.trim().isEmpty || _wifiSaving || _wifiSaved
+                          ? null
+                          : _saveWifi,
+                ),
+                const SizedBox(height: 8),
+                OaButton(
+                  label: 'Reset board Wi-Fi',
+                  variant: OaButtonVariant.secondary,
+                  loading: _wifiResetting,
+                  expand: true,
+                  onPressed: !connected || _wifiSaving || _wifiResetting
+                      ? null
+                      : _resetWifi,
+                ),
+                const SizedBox(height: 8),
+                const Text(
+                  'The board will reboot and use these credentials next time. Reconnect your phone to the same Wi-Fi, then check the connection.',
+                  style: TextStyle(fontSize: 12, height: 1.45, color: Oa.mutedFg),
+                ),
+              ],
             ),
-          ),
-          const SizedBox(height: 8),
-          const _Hint(
-            'The board will reboot and use these credentials next time. Reconnect your phone to the same Wi-Fi, then check the connection.',
           ),
           const SizedBox(height: 24),
-          const _SectionLabel('Server'),
+          const OaSectionHeading('Server', 'Photos upload here right after capture.'),
           const SizedBox(height: 10),
-          TextField(
-            controller: _serverUrl,
-            keyboardType: TextInputType.url,
-            decoration: const InputDecoration(
-              labelText: 'Server URL',
-              hintText: 'https://your-server.example',
+          OaPanel(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                TextField(
+                  controller: _serverUrl,
+                  keyboardType: TextInputType.url,
+                  decoration: const InputDecoration(
+                    labelText: 'Server URL',
+                    hintText: 'http://your-server:8400',
+                  ),
+                  onChanged: (_) => setState(() => _serverSaved = false),
+                ),
+                const SizedBox(height: 10),
+                TextField(
+                  controller: _serverToken,
+                  obscureText: true,
+                  decoration: const InputDecoration(
+                    labelText: 'Access token',
+                    hintText: 'Shared secret',
+                  ),
+                  onChanged: (_) => setState(() => _serverSaved = false),
+                ),
+                const SizedBox(height: 12),
+                OaButton(
+                  label: _serverSaved ? 'Saved on this phone' : 'Save server details',
+                  expand: true,
+                  onPressed: _serverUrl.text.trim().isEmpty ||
+                          _serverToken.text.trim().isEmpty ||
+                          _serverSaved
+                      ? null
+                      : () {
+                          widget.onSaveServerConfig(
+                            ServerConfig(
+                              url: _serverUrl.text.trim(),
+                              token: _serverToken.text.trim(),
+                            ),
+                          );
+                          setState(() => _serverSaved = true);
+                        },
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  _serverConfigStatus,
+                  style: const TextStyle(
+                      fontSize: 12, height: 1.45, color: Oa.mutedFg),
+                ),
+              ],
             ),
-            onChanged: (_) => setState(() => _serverSaved = false),
-          ),
-          const SizedBox(height: 10),
-          SizedBox(
-            width: double.infinity,
-            child: FilledButton.tonal(
-              onPressed: _serverUrl.text.trim().isEmpty
-                  ? null
-                  : () => setState(() => _serverSaved = true),
-              style: _softButtonStyle(),
-              child: Text(
-                _serverSaved ? 'Saved on this phone' : 'Save server URL',
-              ),
-            ),
-          ),
-          const SizedBox(height: 8),
-          const _Hint(
-            'Uploads stay local until we define the server contract together.',
           ),
         ],
       ),
     );
   }
+
+  String get _serverConfigStatus {
+    final configured =
+        _serverUrl.text.trim().isNotEmpty && _serverToken.text.trim().isNotEmpty;
+    return configured
+        ? 'New captures are processed on the server and shown as Treated.'
+        : 'Add a URL and token to upload captures for processing.';
+  }
+
+  String get _wifiSentence {
+    switch ('$_wifiMessage|$_wifiGood') {
+      case _saveFail:
+        return 'Keep the phone connected to CLIPPY-XIAO and try again.';
+      case _saveOkBoth:
+        return 'The board will reboot now.';
+      case _saveOkBoard:
+        return 'This phone could not store the details.';
+      case _resetFail:
+        return 'Check the connection and try again.';
+      case _resetOkBoth:
+        return 'It will restart in setup-hotspot mode.';
+      default:
+        return 'This phone could not clear its saved details.';
+    }
+  }
+
+  static const _saveFail = 'Could not save Wi-Fi credentials.|false';
+  static const _saveOkBoth = 'Saved on the board and this phone.|true';
+  static const _saveOkBoard = 'Saved on the board.|false';
+  static const _resetFail = 'Could not reset the board.|false';
+  static const _resetOkBoth = 'Board Wi-Fi was reset.|true';
 
   Future<void> _saveWifi() async {
     setState(() {
@@ -821,19 +1139,18 @@ class _SettingsViewState extends State<SettingsView> {
           _wifiStorage.write(key: _wifiPasswordKey, value: _wifiPassword.text),
         ]);
         storedOnPhone = true;
-      } catch (_) {
-        // Board provisioning still succeeded; report the local persistence issue.
-      }
+      } catch (_) {}
     }
     if (!mounted) return;
     setState(() {
       _wifiSaving = false;
       _wifiSaved = saved;
+      _wifiGood = saved;
       _wifiMessage = !saved
-          ? 'Could not save Wi-Fi credentials. Keep the phone connected to CLIPPY-XIAO and try again.'
+          ? 'Could not save Wi-Fi credentials.'
           : storedOnPhone
-          ? 'Saved on the board and this phone. The board will reboot now.'
-          : 'Saved on the board, but this phone could not store the details.';
+              ? 'Saved on the board and this phone.'
+              : 'Saved on the board.';
     });
   }
 
@@ -851,9 +1168,7 @@ class _SettingsViewState extends State<SettingsView> {
           _wifiStorage.delete(key: _wifiPasswordKey),
         ]);
         clearedOnPhone = true;
-      } catch (_) {
-        // Board reset still succeeded; report the local cleanup issue.
-      }
+      } catch (_) {}
     }
     if (!mounted) return;
     setState(() {
@@ -863,11 +1178,12 @@ class _SettingsViewState extends State<SettingsView> {
         _wifiName.clear();
         _wifiPassword.clear();
       }
+      _wifiGood = reset;
       _wifiMessage = !reset
-          ? 'Could not reset the board. Check the connection and try again.'
+          ? 'Could not reset the board.'
           : clearedOnPhone
-          ? 'Board Wi-Fi was reset. It will restart in setup-hotspot mode.'
-          : 'Board Wi-Fi was reset, but this phone could not clear its saved details.';
+              ? 'Board Wi-Fi was reset.'
+              : 'Board Wi-Fi was reset.';
     });
   }
 
@@ -876,26 +1192,14 @@ class _SettingsViewState extends State<SettingsView> {
     final captured = await widget.onCapture();
     if (!mounted) return;
     setState(() => _capturing = false);
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(
-          captured
-              ? 'Captured from XIAO and added to Home.'
-              : 'Could not capture from the XIAO.',
-        ),
-      ),
+    OaToast.show(
+      context,
+      good: captured,
+      message: captured
+          ? 'Captured from XIAO and added to Home.'
+          : 'Could not capture from the XIAO.',
     );
   }
-}
-
-ButtonStyle _softButtonStyle() {
-  return FilledButton.styleFrom(
-    backgroundColor: _softSurface,
-    foregroundColor: _ink,
-    disabledBackgroundColor: const Color(0xFFE8E1D5),
-    minimumSize: const Size.fromHeight(48),
-    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-  );
 }
 
 class DeviceController extends ChangeNotifier {
@@ -1078,8 +1382,6 @@ class DeviceController extends ChangeNotifier {
           for (final address in networkInterface.addresses) {
             final octets = address.address.split('.');
             if (octets.length == 4) {
-              // ponytail: /24 is enough for current phone hotspots; replace
-              // with prefix-aware broadcasts if we support arbitrary LANs.
               broadcasts.add(
                 InternetAddress('${octets[0]}.${octets[1]}.${octets[2]}.255'),
               );
@@ -1111,29 +1413,6 @@ class DeviceController extends ChangeNotifier {
   }
 }
 
-List<LocalMoment> _starterMoments() {
-  final now = DateTime.now();
-  return [
-    LocalMoment(
-      id: 'demo-v2-photo',
-      capturedAt: now.subtract(const Duration(days: 2)),
-      originalAsset: 'assets/demo/source-photo.png',
-    ),
-    LocalMoment(
-      id: 'demo-v2-scene-1',
-      capturedAt: now.subtract(const Duration(days: 1)),
-      originalAsset: 'assets/demo/original-1.png',
-    ),
-    LocalMoment(
-      id: 'demo-v2-scene-2',
-      capturedAt: now,
-      originalAsset: 'assets/demo/original-2.png',
-    ),
-  ];
-}
-
-const _currentDemoIds = {'demo-v2-photo', 'demo-v2-scene-1', 'demo-v2-scene-2'};
-
 class LocalMoment {
   const LocalMoment({
     required this.id,
@@ -1144,6 +1423,7 @@ class LocalMoment {
     this.treatedAsset,
     this.originalPath,
     this.treatedPath,
+    this.remoteId,
   });
 
   final String id;
@@ -1154,6 +1434,7 @@ class LocalMoment {
   final String? treatedAsset;
   final String? originalPath;
   final String? treatedPath;
+  final String? remoteId;
 
   LocalMoment withPaths({
     required String? originalPath,
@@ -1166,17 +1447,19 @@ class LocalMoment {
       treatedAsset: treatedAsset,
       originalPath: originalPath,
       treatedPath: treatedPath,
+      remoteId: remoteId,
     );
   }
 
   Map<String, dynamic> toJson() => {
-    'id': id,
-    'capturedAt': capturedAt.toIso8601String(),
-    if (originalAsset != null) 'originalAsset': originalAsset,
-    if (treatedAsset != null) 'treatedAsset': treatedAsset,
-    if (originalPath != null) 'originalPath': originalPath,
-    if (treatedPath != null) 'treatedPath': treatedPath,
-  };
+        'id': id,
+        'capturedAt': capturedAt.toIso8601String(),
+        if (originalAsset != null) 'originalAsset': originalAsset,
+        if (treatedAsset != null) 'treatedAsset': treatedAsset,
+        if (originalPath != null) 'originalPath': originalPath,
+        if (treatedPath != null) 'treatedPath': treatedPath,
+        if (remoteId != null) 'remoteId': remoteId,
+      };
 
   factory LocalMoment.fromJson(Map<String, dynamic> json) {
     return LocalMoment(
@@ -1186,6 +1469,7 @@ class LocalMoment {
       treatedAsset: json['treatedAsset'] as String?,
       originalPath: json['originalPath'] as String?,
       treatedPath: json['treatedPath'] as String?,
+      remoteId: json['remoteId'] as String?,
     );
   }
 }
@@ -1287,62 +1571,63 @@ class _MomentDetailPageState extends State<MomentDetailPage> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: _page,
+      backgroundColor: Colors.white,
       body: SafeArea(
         child: Padding(
-          padding: const EdgeInsets.fromLTRB(20, 12, 20, 24),
+          padding: const EdgeInsets.fromLTRB(16, 8, 16, 32),
           child: Column(
             children: [
               Row(
                 children: [
-                  SizedBox(
-                    width: 48,
-                    child: IconButton(
-                      onPressed: () => Navigator.pop(context),
-                      tooltip: 'Back',
-                      icon: const Icon(Icons.arrow_back_rounded, color: _ink),
-                    ),
+                  OaIconButton(
+                    icon: Icons.arrow_back_outlined,
+                    tooltip: 'Back',
+                    onPressed: () => Navigator.pop(context),
                   ),
+                  const SizedBox(width: 4),
                   Expanded(
-                    child: Center(
-                      child: SegmentedButton<bool>(
-                        segments: const [
-                          ButtonSegment(value: false, label: Text('Original')),
-                          ButtonSegment(value: true, label: Text('Treated')),
-                        ],
-                        selected: {_showTreated},
-                        showSelectedIcon: false,
-                        onSelectionChanged: (selection) {
-                          setState(() => _showTreated = selection.first);
-                        },
-                      ),
+                    child: OaSegmented(
+                      labels: const ['Original', 'Treated'],
+                      index: _showTreated ? 1 : 0,
+                      onChanged: (index) =>
+                          setState(() => _showTreated = index == 1),
                     ),
                   ),
-                  SizedBox(
-                    width: 48,
-                    child: IconButton(
-                      onPressed: _delete,
-                      tooltip: 'Delete',
-                      icon: const Icon(
-                        Icons.delete_outline_rounded,
-                        color: _ink,
-                      ),
-                    ),
+                  const SizedBox(width: 4),
+                  OaIconButton(
+                    icon: Icons.delete_outline_rounded,
+                    tooltip: 'Delete',
+                    danger: true,
+                    onPressed: _delete,
                   ),
                 ],
               ),
-              const SizedBox(height: 20),
+              const SizedBox(height: 16),
               Expanded(
-                child: ClipRRect(
-                  borderRadius: BorderRadius.circular(12),
-                  child: _MomentVisual(
-                    moment: widget.moment,
-                    showTreated: _showTreated,
-                    fit: BoxFit.contain,
+                child: Container(
+                  decoration: ShapeDecoration(
+                    color: Oa.card,
+                    shadows: Oa.restingShadows,
+                    shape: const SquircleBorder(
+                      side: BorderSide(color: Oa.border),
+                    ),
+                  ),
+                  padding: const EdgeInsets.all(4),
+                  child: ClipPath(
+                    clipper: const OaSquircleClipper(),
+                    child: Container(
+                      color: Oa.stage,
+                      width: double.infinity,
+                      child: _MomentVisual(
+                        moment: widget.moment,
+                        showTreated: _showTreated,
+                        fit: BoxFit.contain,
+                      ),
+                    ),
                   ),
                 ),
               ),
-              const SizedBox(height: 20),
+              const SizedBox(height: 16),
               Align(
                 alignment: Alignment.centerLeft,
                 child: Column(
@@ -1351,20 +1636,27 @@ class _MomentDetailPageState extends State<MomentDetailPage> {
                     Text(
                       _showTreated ? 'Treated image' : 'Original image',
                       style: const TextStyle(
-                        color: _ink,
-                        fontSize: 18,
-                        fontWeight: FontWeight.w800,
+                        fontSize: 15,
+                        fontWeight: FontWeight.w500,
+                        letterSpacing: -0.2,
+                        color: Oa.fg80,
                       ),
                     ),
-                    const SizedBox(height: 4),
+                    const SizedBox(height: 2),
                     Text(
                       'Uploaded ${_formatMomentDate(widget.moment.capturedAt)}',
-                      style: const TextStyle(color: _muted),
+                      style: const TextStyle(
+                        fontSize: 13,
+                        color: Oa.mutedFg,
+                        fontFeatures: [FontFeature.tabularFigures()],
+                      ),
                     ),
-                    const SizedBox(height: 4),
-                    const Text(
-                      'Saved on this phone',
-                      style: TextStyle(color: _muted, fontSize: 13),
+                    const SizedBox(height: 2),
+                    Text(
+                      widget.moment.remoteId == null
+                          ? 'Processed on this phone'
+                          : 'Processed on server · ${widget.moment.remoteId}',
+                      style: const TextStyle(fontSize: 12, color: Oa.mutedFg),
                     ),
                   ],
                 ),
@@ -1377,24 +1669,39 @@ class _MomentDetailPageState extends State<MomentDetailPage> {
   }
 
   Future<void> _delete() async {
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Delete this image?'),
-        content: const Text('This removes it from the local gallery.'),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context, false),
-            child: const Text('Cancel'),
+    final confirmed = await OaModal.show(
+      context,
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text(
+            'Delete this photo?',
+            style: TextStyle(
+              fontSize: 15,
+              fontWeight: FontWeight.w500,
+              letterSpacing: -0.2,
+              color: Oa.ink,
+            ),
           ),
-          FilledButton(
-            onPressed: () => Navigator.pop(context, true),
-            child: const Text('Delete'),
+          const SizedBox(height: 6),
+          Text(
+            widget.moment.remoteId == null
+                ? 'This removes it from this phone.'
+                : 'This removes it from the server and every device.',
+            style: const TextStyle(fontSize: 13, height: 1.45, color: Oa.mutedFg),
+          ),
+          OaModalFooter(
+            backLabel: 'Back',
+            actionLabel: 'Delete photo',
+            destructive: true,
+            onBack: () => Navigator.pop(context, false),
+            onAction: () => Navigator.pop(context, true),
           ),
         ],
       ),
     );
-    if (confirmed == true && mounted) Navigator.pop(context, true);
+    if (confirmed && mounted) Navigator.pop(context, true);
   }
 }
 
@@ -1420,9 +1727,8 @@ class _MomentVisual extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final errorWidget = const ColoredBox(
-      color: _softSurface,
-      child: Center(child: Icon(Icons.broken_image_outlined, color: _muted)),
+    final errorWidget = Center(
+      child: Icon(Icons.broken_image_outlined, color: Oa.mutedFg),
     );
     final bytes = showTreated
         ? moment.treatedBytes ?? moment.originalBytes
@@ -1462,90 +1768,6 @@ class _MomentVisual extends StatelessWidget {
   }
 }
 
-class _SectionLabel extends StatelessWidget {
-  const _SectionLabel(this.label);
-
-  final String label;
-
-  @override
-  Widget build(BuildContext context) {
-    return Text(
-      label,
-      style: const TextStyle(
-        color: _muted,
-        fontSize: 13,
-        fontWeight: FontWeight.w700,
-      ),
-    );
-  }
-}
-
-class _OutlinedPanel extends StatelessWidget {
-  const _OutlinedPanel({required this.child});
-
-  final Widget child;
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: _softSurface,
-        borderRadius: BorderRadius.circular(16),
-      ),
-      child: Material(color: Colors.transparent, child: child),
-    );
-  }
-}
-
-class _SettingRow extends StatelessWidget {
-  const _SettingRow({
-    required this.icon,
-    required this.title,
-    required this.detail,
-    required this.trailing,
-  });
-
-  final IconData icon;
-  final String title;
-  final String detail;
-  final Widget trailing;
-
-  @override
-  Widget build(BuildContext context) {
-    return Row(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Icon(icon, color: _ink),
-        const SizedBox(width: 12),
-        Expanded(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(title, style: const TextStyle(fontWeight: FontWeight.w800)),
-              const SizedBox(height: 3),
-              Text(detail, style: const TextStyle(color: _muted)),
-            ],
-          ),
-        ),
-        const SizedBox(width: 8),
-        trailing,
-      ],
-    );
-  }
-}
-
-class _Hint extends StatelessWidget {
-  const _Hint(this.message);
-
-  final String message;
-
-  @override
-  Widget build(BuildContext context) {
-    return Text(message, style: const TextStyle(color: _muted, fontSize: 13));
-  }
-}
-
 class _LivePreview extends StatelessWidget {
   const _LivePreview({required this.url});
 
@@ -1553,11 +1775,18 @@ class _LivePreview extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return ClipRRect(
-      borderRadius: BorderRadius.circular(8),
-      child: AspectRatio(
-        aspectRatio: 4 / 3,
-        child: MjpegView(url: url, enabled: true),
+    return AspectRatio(
+      aspectRatio: 4 / 3,
+      child: DecoratedBox(
+        decoration: const ShapeDecoration(
+          color: Oa.stage,
+          shadows: Oa.restingShadows,
+          shape: SquircleBorder(radius: Oa.insetRadius, handle: Oa.insetHandle),
+        ),
+        child: ClipPath(
+          clipper: const OaSquircleClipper(),
+          child: MjpegView(url: url, enabled: true),
+        ),
       ),
     );
   }
