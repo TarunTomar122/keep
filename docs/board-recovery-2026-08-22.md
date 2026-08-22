@@ -22,14 +22,57 @@ PSRAM all responded normally in bootloader mode.
 
 ## How it was fixed
 
-1. Entered the ESP32-S3 bootloader with the reset/boot-button sequence.
-2. Confirmed ESP32-S3 revision 0.2, 8 MB flash, and 8 MB PSRAM.
-3. Read and saved the complete 8 MB flash backup locally at
-   `/tmp/keep-xiao-flash-backup-20260822.bin`. It is intentionally not in the
-   repository because the dump may contain saved Wi-Fi credentials.
-4. Flashed `firmware/hello_xiao/hello_xiao.ino`, including boot metadata, and
-   verified the application bytes against flash.
-5. Confirmed stable serial output once per second and a blinking onboard LED.
+1. Confirmed the board was visible at `/dev/cu.usbmodem1101` with
+   `arduino-cli board list`.
+2. Tried the normal upload first. It failed with `No serial data received`
+   because the crashing application was not entering the bootloader.
+3. Entered the ESP32-S3 bootloader by double-pressing `RST`, then holding
+   `BOOT`, tapping `RST`, and releasing `BOOT`.
+4. Confirmed the chip and flash with:
+
+   ```bash
+   esptool --before no-reset --after no-reset \
+     --port /dev/cu.usbmodem1101 chip-id
+   esptool --before no-reset --after no-reset \
+     --port /dev/cu.usbmodem1101 flash-id
+   ```
+
+   This reported ESP32-S3 revision 0.2, 8 MB flash, and 8 MB PSRAM.
+5. Read and saved the complete 8 MB flash backup locally with:
+
+   ```bash
+   esptool --before no-reset --after no-reset \
+     --port /dev/cu.usbmodem1101 read-flash 0 0x800000 \
+     /tmp/keep-xiao-flash-backup-20260822.bin
+   ```
+
+   It is intentionally not in the repository because the dump may contain
+   saved Wi-Fi credentials.
+6. Flashed the minimal recovery sketch with:
+
+   ```bash
+   arduino-cli compile --upload \
+     --port /dev/cu.usbmodem1101 \
+     --fqbn esp32:esp32:XIAO_ESP32S3 \
+     firmware/hello_xiao
+   ```
+
+   This was a targeted reflash of the bootloader metadata and application;
+   no full-chip erase was needed.
+7. Verified the application bytes with `esptool verify-flash`; the digest
+   matched. The sketch then printed `clippy: heartbeat ... ms` once per
+   second and blinked the onboard LED.
+
+The recovery was repeated later with the same `hello_xiao` command. Arduino
+CLI verified the unchanged bootloader and partition data, rewrote the
+application image, and `esptool verify-flash` again reported a matching
+digest.
+
+The exact recovery image is:
+
+```text
+firmware/hello_xiao/hello_xiao.ino
+```
 
 ## What to expect now
 
