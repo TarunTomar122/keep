@@ -2,7 +2,6 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
-import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:path_provider/path_provider.dart';
 
 const kDefaultServerUrl = String.fromEnvironment(
@@ -18,33 +17,6 @@ class ServerConfig {
   final String token;
 
   bool get isConfigured => url.trim().isNotEmpty && token.trim().isNotEmpty;
-}
-
-class ServerConfigStore {
-  static const _urlKey = 'server_url';
-  static const _tokenKey = 'server_token';
-
-  final FlutterSecureStorage _storage = const FlutterSecureStorage();
-
-  Future<ServerConfig> load() async {
-    try {
-      final values = await Future.wait([
-        _storage.read(key: _urlKey),
-        _storage.read(key: _tokenKey),
-      ]);
-      return ServerConfig(
-        url: values[0]?.trim().isNotEmpty == true ? values[0]! : kDefaultServerUrl,
-        token: values[1] ?? kDefaultServerToken,
-      );
-    } catch (_) {
-      return ServerConfig(url: kDefaultServerUrl, token: kDefaultServerToken);
-    }
-  }
-
-  Future<void> save(ServerConfig config) async {
-    await _storage.write(key: _urlKey, value: config.url.trim());
-    await _storage.write(key: _tokenKey, value: config.token.trim());
-  }
 }
 
 class UploadedMoment {
@@ -156,8 +128,10 @@ class KeepServerClient {
       ..connectionTimeout = const Duration(seconds: 10);
     try {
       final request = await client.openUrl('DELETE', _uri('/photos/$momentId'));
-      request.headers.set(HttpHeaders.authorizationHeader,
-          'Bearer ${config.token.trim()}');
+      request.headers.set(
+        HttpHeaders.authorizationHeader,
+        'Bearer ${config.token.trim()}',
+      );
       final response = await request.close();
       await response.drain<void>();
       if (response.statusCode != HttpStatus.ok) {
@@ -175,8 +149,10 @@ class KeepServerClient {
       final base = Uri.parse(config.url.trim());
       final relative = path.startsWith('/') ? path.substring(1) : path;
       final request = await client.getUrl(base.resolve(relative));
-      request.headers.set(HttpHeaders.authorizationHeader,
-          'Bearer ${config.token.trim()}');
+      request.headers.set(
+        HttpHeaders.authorizationHeader,
+        'Bearer ${config.token.trim()}',
+      );
       final response = await request.close();
       if (response.statusCode != HttpStatus.ok) {
         throw HttpException('Download failed (${response.statusCode})');
@@ -196,12 +172,16 @@ class KeepServerClient {
       ..connectionTimeout = const Duration(seconds: 10);
     try {
       final request = await client.openUrl(method, uri);
-      request.headers.set(HttpHeaders.authorizationHeader,
-          'Bearer ${config.token.trim()}');
+      request.headers.set(
+        HttpHeaders.authorizationHeader,
+        'Bearer ${config.token.trim()}',
+      );
       final response = await request.close();
       final payload = await response.transform(utf8.decoder).join();
       if (response.statusCode != HttpStatus.ok) {
-        throw HttpException('$method ${uri.path} failed (${response.statusCode})');
+        throw HttpException(
+          '$method ${uri.path} failed (${response.statusCode})',
+        );
       }
       return jsonDecode(payload);
     } finally {
@@ -215,10 +195,14 @@ class KeepServerClient {
       ..connectionTimeout = const Duration(seconds: 10);
     try {
       final request = await client.postUrl(_uri('/upload'));
-      request.headers.set(HttpHeaders.authorizationHeader,
-          'Bearer ${config.token.trim()}');
-      request.headers.set(HttpHeaders.contentTypeHeader,
-          'multipart/form-data; boundary=$boundary');
+      request.headers.set(
+        HttpHeaders.authorizationHeader,
+        'Bearer ${config.token.trim()}',
+      );
+      request.headers.set(
+        HttpHeaders.contentTypeHeader,
+        'multipart/form-data; boundary=$boundary',
+      );
       final header = utf8.encode(
         '--$boundary\r\n'
         'Content-Disposition: form-data; name="photo"; filename="capture.jpg"\r\n'

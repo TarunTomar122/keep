@@ -34,7 +34,6 @@ dependencies:
   # The following adds the Cupertino Icons font to your application.
   # Use with the CupertinoIcons class for iOS style icons.
   cupertino_icons: ^1.0.8
-  forui: ^0.25.0
   flutter_secure_storage: ^10.3.1
   image: ^4.9.1
   image_picker: ^1.2.3
@@ -60,6 +59,16 @@ flutter:
 
   assets:
     - assets/demo/
+
+  fonts:
+    - family: InterTight
+      fonts:
+        - asset: assets/fonts/InterTight.ttf
+          weight: 300
+        - asset: assets/fonts/InterTight.ttf
+          weight: 400
+        - asset: assets/fonts/InterTight.ttf
+          weight: 500
 
   # The following line ensures that the Material Icons font is
   # included with your application, so that you can use the icons in

@@ -8,7 +8,7 @@ from typing import Optional
 import uuid
 from pathlib import Path
 
-from fastapi import FastAPI, File, Header, HTTPException, Response, UploadFile
+from fastapi import FastAPI, File, Header, HTTPException, Request, Response, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse
 
 from pipeline import process_bytes
@@ -19,9 +19,10 @@ TOKEN = os.environ.get("KEEP_TOKEN", "dev-token")
 ORIGINALS_DIR = DATA_DIR / "originals"
 PROCESSED_DIR = DATA_DIR / "processed"
 FRAMES_DIR = DATA_DIR / "frames"
+DEMO_DIR = DATA_DIR / "demo"
 INDEX_PATH = DATA_DIR / "index.json"
 
-for directory in (ORIGINALS_DIR, PROCESSED_DIR, FRAMES_DIR):
+for directory in (ORIGINALS_DIR, PROCESSED_DIR, FRAMES_DIR, DEMO_DIR):
     directory.mkdir(parents=True, exist_ok=True)
 
 app = FastAPI(title="keep-server")
@@ -168,13 +169,43 @@ async def view() -> HTMLResponse:
 
 
 @app.get("/latest")
-async def latest(response: Response) -> FileResponse:
+async def latest(
+    request: Request,
+    authorization: Optional[str] = Header(default=None),
+) -> Response:
+    _require_token(authorization)
     moments = _load_index()
     if not moments:
         raise HTTPException(status_code=404, detail="No photos yet")
     newest = moments[-1]
-    response.headers["X-Moment-Id"] = newest["id"]
+    headers = {
+        "X-Moment-Id": newest["id"],
+        "ETag": f'"{newest["id"]}"',
+        "Cache-Control": "no-cache",
+    }
+    if request.headers.get("if-none-match") == headers["ETag"]:
+        return Response(status_code=304, headers=headers)
     return FileResponse(
         FRAMES_DIR / f"{newest['id']}.bin",
         media_type="application/octet-stream",
+        headers=headers,
+    )
+
+
+@app.get("/demo/frame/{index}")
+async def demo_frame(
+    index: int,
+    authorization: Optional[str] = Header(default=None),
+) -> FileResponse:
+    _require_token(authorization)
+    frames = sorted(DEMO_DIR.glob("*.bin"))
+    if index < 0 or index >= len(frames):
+        raise HTTPException(status_code=404, detail="Demo frame not found")
+    return FileResponse(
+        frames[index],
+        media_type="application/octet-stream",
+        headers={
+            "X-Demo-Index": str(index),
+            "Cache-Control": "no-cache",
+        },
     )

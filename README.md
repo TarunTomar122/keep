@@ -156,6 +156,7 @@ GET    /photos              Auth. List of moments (newest first).
 GET    /photos/{id}         Auth. One moment record.
 GET    /photos/{id}/original.jpg   Original bytes (public).
 GET    /photos/{id}/processed.png  Treated bytes (public).
+GET    /latest              Auth. Latest raw 120,000-byte e-paper frame
 GET    /view                Latest processed image as a standalone page
                            (auto-refreshes every 10s).
 DELETE /photos/{id}         Auth. Remove a moment and its files.

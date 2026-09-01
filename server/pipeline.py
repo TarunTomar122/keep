@@ -19,6 +19,7 @@ PALETTE = {
 }
 
 DRIVER_INDEX = {"black": 0, "white": 1, "green": 2, "blue": 3, "red": 4, "yellow": 5}
+DRIVER_CODES = np.array([0, 1, 6, 5, 3, 2], dtype=np.uint8)
 
 GAMMA = 0.88
 SATURATION = 1.3
@@ -139,5 +140,8 @@ def _encode_png(idx: np.ndarray) -> bytes:
 
 
 def _pack_raw(idx: np.ndarray) -> bytes:
-    packed = (idx[:, 0::2].astype(np.uint8) << 4) | idx[:, 1::2].astype(np.uint8)
+    # The panel streams 400x600 physical rows; the image pipeline works in
+    # the board's 600x400 logical orientation.
+    physical = np.rot90(DRIVER_CODES[idx], k=3)
+    packed = (physical[:, 0::2] << 4) | physical[:, 1::2]
     return packed.tobytes()

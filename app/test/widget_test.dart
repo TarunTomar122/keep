@@ -1,5 +1,6 @@
 import 'dart:typed_data';
 
+import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:image/image.dart' as img;
 
@@ -7,12 +8,28 @@ import 'package:clippy_companion/design/oa.dart';
 import 'package:clippy_companion/main.dart';
 
 void main() {
+  testWidgets('first launch asks which side of Keep this is for', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: oaTheme(),
+        home: RoleOnboardingPage(onSelectRole: (role) {}),
+      ),
+    );
+
+    expect(find.text('Who are you?'), findsOneWidget);
+    await tester.tap(find.text('Monisha'));
+    await tester.pump();
+  });
+
   testWidgets('home add button adds a phone photo to the gallery', (
     tester,
   ) async {
     var pickerCalls = 0;
     await tester.pumpWidget(
       ClippyCompanionApp(
+        role: KeepRole.tarun,
         probeDevice: false,
         imageProcessor: (bytes) async => bytes,
         phonePhotoPicker: () async {
@@ -28,10 +45,7 @@ void main() {
     await tester.ensureVisible(addButton);
     tester
         .widget<OaButton>(
-          find.ancestor(
-            of: addButton,
-            matching: find.byType(OaButton),
-          ).first,
+          find.ancestor(of: addButton, matching: find.byType(OaButton)).first,
         )
         .onPressed!
         .call();
@@ -48,16 +62,38 @@ void main() {
   });
 
   testWidgets('settings shows device and setup controls', (tester) async {
-    await tester.pumpWidget(const ClippyCompanionApp(probeDevice: false));
+    await tester.pumpWidget(
+      const ClippyCompanionApp(probeDevice: false, role: KeepRole.tarun),
+    );
 
     await tester.tap(find.byTooltip('Settings'));
     await tester.pump(const Duration(milliseconds: 200));
 
-    expect(find.text('Board battery'), findsOneWidget);
+    expect(find.text('Board battery'), findsNothing);
     expect(find.text('Board Wi-Fi', skipOffstage: false), findsOneWidget);
-    expect(find.text('Server URL', skipOffstage: false), findsOneWidget);
+    expect(find.text('Server URL', skipOffstage: false), findsNothing);
+    expect(find.text('Access token', skipOffstage: false), findsNothing);
     expect(find.text('Live capture mode', skipOffstage: false), findsOneWidget);
     expect(find.byTooltip('Back to Home'), findsOneWidget);
+  });
+
+  testWidgets('Monisha settings shows the daily wake schedule', (tester) async {
+    await tester.pumpWidget(
+      const ClippyCompanionApp(probeDevice: false, role: KeepRole.monisha),
+    );
+
+    await tester.tap(find.byTooltip('Settings'));
+    await tester.pump(const Duration(milliseconds: 200));
+
+    expect(find.text('Wake schedule', skipOffstage: false), findsOneWidget);
+    expect(
+      find.text('Daily e-paper refresh', skipOffstage: false),
+      findsOneWidget,
+    );
+    expect(find.text('Six-frame demo', skipOffstage: false), findsOneWidget);
+    expect(find.text('Start slideshow', skipOffstage: false), findsOneWidget);
+    expect(find.byTooltip('Refresh display'), findsOneWidget);
+    expect(find.text('Server not set up.', skipOffstage: false), findsNothing);
   });
 
   testWidgets('gallery opens a moment detail view after capture', (
@@ -65,6 +101,7 @@ void main() {
   ) async {
     await tester.pumpWidget(
       ClippyCompanionApp(
+        role: KeepRole.tarun,
         probeDevice: false,
         imageProcessor: (bytes) async => bytes,
         phonePhotoPicker: () async =>
@@ -75,10 +112,7 @@ void main() {
     final addButton = find.byTooltip('Take a photo');
     tester
         .widget<OaButton>(
-          find.ancestor(
-            of: addButton,
-            matching: find.byType(OaButton),
-          ).first,
+          find.ancestor(of: addButton, matching: find.byType(OaButton)).first,
         )
         .onPressed!
         .call();
@@ -102,6 +136,7 @@ void main() {
     var submissions = 0;
     await tester.pumpWidget(
       ClippyCompanionApp(
+        role: KeepRole.tarun,
         probeDevice: false,
         imageProcessor: (bytes) async => bytes,
         phonePhotoPicker: () async =>
@@ -116,10 +151,7 @@ void main() {
     final addButton = find.byTooltip('Take a photo');
     tester
         .widget<OaButton>(
-          find.ancestor(
-            of: addButton,
-            matching: find.byType(OaButton),
-          ).first,
+          find.ancestor(of: addButton, matching: find.byType(OaButton)).first,
         )
         .onPressed!
         .call();

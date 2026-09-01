@@ -19,6 +19,34 @@ typedef PhonePhotoPicker = Future<Uint8List?> Function();
 typedef ImageProcessor = Future<Uint8List> Function(Uint8List input);
 typedef PhotoSubmitter = Future<ProcessedPhoto> Function(Uint8List input);
 
+enum KeepRole { tarun, monisha }
+
+extension KeepRoleCopy on KeepRole {
+  String get label => this == KeepRole.tarun ? 'Tarun' : 'Monisha';
+
+  String get subtitle => this == KeepRole.tarun
+      ? 'Capture and send the next little moment.'
+      : 'Keep the latest moments close.';
+
+  KeepRole get other =>
+      this == KeepRole.tarun ? KeepRole.monisha : KeepRole.tarun;
+}
+
+int _nextWakeEpoch(TimeOfDay time, {DateTime? now}) {
+  final current = (now ?? DateTime.now()).toLocal();
+  var next = DateTime(
+    current.year,
+    current.month,
+    current.day,
+    time.hour,
+    time.minute,
+  );
+  if (!next.isAfter(current)) next = next.add(const Duration(days: 1));
+  return next.toUtc().millisecondsSinceEpoch ~/ 1000;
+}
+
+const _roleStorageKey = 'keep_role';
+
 class ProcessedPhoto {
   const ProcessedPhoto({required this.bytes, this.remoteId});
 
@@ -48,16 +76,16 @@ class ClippyCompanionApp extends StatelessWidget {
     this.probeDevice = true,
     this.phonePhotoPicker,
     this.imageProcessor,
-    this.serverConfig,
     this.photoSubmitter,
+    this.role,
     super.key,
   });
 
   final bool probeDevice;
   final PhonePhotoPicker? phonePhotoPicker;
   final ImageProcessor? imageProcessor;
-  final ServerConfig? serverConfig;
   final PhotoSubmitter? photoSubmitter;
+  final KeepRole? role;
 
   @override
   Widget build(BuildContext context) {
@@ -69,12 +97,303 @@ class ClippyCompanionApp extends StatelessWidget {
         debugShowCheckedModeBanner: false,
         title: 'Keep',
         theme: oaTheme(),
-        home: CompanionShell(
+        home: RoleGate(
+          initialRole: role,
           probeDevice: probeDevice,
           phonePhotoPicker: phonePhotoPicker ?? pickPhonePhoto,
           imageProcessor: imageProcessor ?? const LocalImageProcessor().process,
-          serverConfig: serverConfig,
           photoSubmitter: photoSubmitter,
+        ),
+      ),
+    );
+  }
+}
+
+class RoleGate extends StatefulWidget {
+  const RoleGate({
+    required this.initialRole,
+    required this.probeDevice,
+    required this.phonePhotoPicker,
+    required this.imageProcessor,
+    this.photoSubmitter,
+    super.key,
+  });
+
+  final KeepRole? initialRole;
+  final bool probeDevice;
+  final PhonePhotoPicker phonePhotoPicker;
+  final ImageProcessor imageProcessor;
+  final PhotoSubmitter? photoSubmitter;
+
+  @override
+  State<RoleGate> createState() => _RoleGateState();
+}
+
+class _RoleGateState extends State<RoleGate> {
+  final _storage = FlutterSecureStorage();
+  KeepRole? _role;
+  bool _loading = true;
+
+  @override
+  void initState() {
+    super.initState();
+    if (widget.initialRole != null) {
+      _role = widget.initialRole;
+      _loading = false;
+    } else {
+      unawaited(_restoreRole());
+    }
+  }
+
+  Future<void> _restoreRole() async {
+    try {
+      final value = await _storage.read(key: _roleStorageKey);
+      _role = switch (value) {
+        'tarun' => KeepRole.tarun,
+        'monisha' => KeepRole.monisha,
+        _ => null,
+      };
+    } catch (_) {
+      _role = null;
+    }
+    if (mounted) setState(() => _loading = false);
+  }
+
+  Future<void> _selectRole(KeepRole role) async {
+    setState(() => _role = role);
+    try {
+      await _storage.write(key: _roleStorageKey, value: role.name);
+    } catch (_) {}
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_loading) {
+      return const Scaffold(
+        backgroundColor: Oa.stage,
+        body: Center(
+          child: Text(
+            'Keep',
+            style: TextStyle(
+              fontSize: 18,
+              fontWeight: FontWeight.w500,
+              color: Oa.ink,
+            ),
+          ),
+        ),
+      );
+    }
+    final role = _role;
+    if (role == null) {
+      return RoleOnboardingPage(
+        onSelectRole: (value) => unawaited(_selectRole(value)),
+      );
+    }
+    return CompanionShell(
+      role: role,
+      onRoleChanged: (value) => unawaited(_selectRole(value)),
+      probeDevice: widget.probeDevice,
+      phonePhotoPicker: widget.phonePhotoPicker,
+      imageProcessor: widget.imageProcessor,
+      photoSubmitter: widget.photoSubmitter,
+    );
+  }
+}
+
+class RoleOnboardingPage extends StatelessWidget {
+  const RoleOnboardingPage({required this.onSelectRole, super.key});
+
+  final ValueChanged<KeepRole> onSelectRole;
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: Oa.stage,
+      body: SafeArea(
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.fromLTRB(20, 20, 20, 28),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                'KEEP',
+                style: TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w500,
+                  letterSpacing: 1.8,
+                  color: Oa.mutedFg,
+                ),
+              ),
+              const SizedBox(height: 24),
+              const Text(
+                'Make a little room\nfor moments.',
+                style: TextStyle(
+                  fontSize: 34,
+                  height: 1.04,
+                  fontWeight: FontWeight.w500,
+                  letterSpacing: -1.3,
+                  color: Oa.ink,
+                ),
+              ),
+              const SizedBox(height: 12),
+              const Text(
+                'One shared wall, two ways to use it.\nLet’s set up your side of Keep.',
+                style: TextStyle(fontSize: 15, height: 1.45, color: Oa.mutedFg),
+              ),
+              const SizedBox(height: 24),
+              Container(
+                height: 184,
+                width: double.infinity,
+                clipBehavior: Clip.hardEdge,
+                decoration: ShapeDecoration(
+                  color: Oa.primaryDeep,
+                  shadows: Oa.floatingShadows,
+                  shape: const SquircleBorder(radius: 22, handle: 3),
+                ),
+                child: Stack(
+                  clipBehavior: Clip.hardEdge,
+                  children: [
+                    Positioned(
+                      right: -28,
+                      top: -48,
+                      child: Container(
+                        width: 150,
+                        height: 150,
+                        decoration: const BoxDecoration(
+                          color: Color(0x385E78FF),
+                          shape: BoxShape.circle,
+                        ),
+                      ),
+                    ),
+                    Positioned(
+                      left: -36,
+                      bottom: -62,
+                      child: Container(
+                        width: 168,
+                        height: 168,
+                        decoration: const BoxDecoration(
+                          color: Color(0x322EC6A5),
+                          shape: BoxShape.circle,
+                        ),
+                      ),
+                    ),
+                    const Center(
+                      child: Column(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Icon(
+                            Icons.auto_awesome_outlined,
+                            size: 30,
+                            color: Color(0xFFE5E8FF),
+                          ),
+                          SizedBox(height: 14),
+                          Text(
+                            'A shared wall for the two of you',
+                            style: TextStyle(
+                              fontSize: 15,
+                              fontWeight: FontWeight.w500,
+                              color: Colors.white,
+                            ),
+                          ),
+                          SizedBox(height: 4),
+                          Text(
+                            'small things are worth keeping',
+                            style: TextStyle(
+                              fontSize: 12,
+                              color: Color(0xB8FFFFFF),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 28),
+              const Text(
+                'Who are you?',
+                style: TextStyle(
+                  fontSize: 18,
+                  fontWeight: FontWeight.w500,
+                  letterSpacing: -0.3,
+                  color: Oa.ink,
+                ),
+              ),
+              const SizedBox(height: 10),
+              for (final role in KeepRole.values) ...[
+                _RoleChoiceCard(role: role, onTap: () => onSelectRole(role)),
+                if (role != KeepRole.values.last) const SizedBox(height: 10),
+              ],
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _RoleChoiceCard extends StatelessWidget {
+  const _RoleChoiceCard({required this.role, required this.onTap});
+
+  final KeepRole role;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Semantics(
+      button: true,
+      label: 'Continue as ${role.label}',
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: onTap,
+        child: Container(
+          padding: const EdgeInsets.all(14),
+          decoration: ShapeDecoration(
+            color: Oa.card,
+            shadows: Oa.restingShadows,
+            shape: const SquircleBorder(side: BorderSide(color: Oa.border)),
+          ),
+          child: Row(
+            children: [
+              Container(
+                width: 42,
+                height: 42,
+                decoration: const ShapeDecoration(
+                  color: Oa.accentWash,
+                  shape: CircleBorder(),
+                ),
+                child: Icon(
+                  role == KeepRole.tarun
+                      ? Icons.camera_alt_outlined
+                      : Icons.collections_bookmark_outlined,
+                  size: 20,
+                  color: Oa.primaryDeep,
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      role.label,
+                      style: const TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w500,
+                        color: Oa.ink,
+                      ),
+                    ),
+                    const SizedBox(height: 3),
+                    Text(
+                      role.subtitle,
+                      style: const TextStyle(fontSize: 13, color: Oa.mutedFg),
+                    ),
+                  ],
+                ),
+              ),
+              const Icon(Icons.arrow_forward_ios, size: 15, color: Oa.mutedFg),
+            ],
+          ),
         ),
       ),
     );
@@ -83,18 +402,20 @@ class ClippyCompanionApp extends StatelessWidget {
 
 class CompanionShell extends StatefulWidget {
   const CompanionShell({
+    required this.role,
+    required this.onRoleChanged,
     required this.probeDevice,
     required this.phonePhotoPicker,
     required this.imageProcessor,
-    this.serverConfig,
     this.photoSubmitter,
     super.key,
   });
 
+  final KeepRole role;
+  final ValueChanged<KeepRole> onRoleChanged;
   final bool probeDevice;
   final PhonePhotoPicker phonePhotoPicker;
   final ImageProcessor imageProcessor;
-  final ServerConfig? serverConfig;
   final PhotoSubmitter? photoSubmitter;
 
   @override
@@ -105,10 +426,11 @@ class _CompanionShellState extends State<CompanionShell> {
   final DeviceController _device = DeviceController();
   final List<LocalMoment> _moments = [];
   final LocalMomentStore _momentStore = LocalMomentStore();
-  final ServerConfigStore _serverConfigStore = ServerConfigStore();
   final ServerImageCache _imageCache = ServerImageCache();
-  late ServerConfig _serverConfig = widget.serverConfig ??
-      const ServerConfig(url: kDefaultServerUrl, token: kDefaultServerToken);
+  final ServerConfig _serverConfig = const ServerConfig(
+    url: kDefaultServerUrl,
+    token: kDefaultServerToken,
+  );
   late final PhotoSubmitter _submitPhoto =
       widget.photoSubmitter ?? _defaultSubmit;
   bool _syncing = false;
@@ -116,12 +438,12 @@ class _CompanionShellState extends State<CompanionShell> {
   final Set<String> _deletingIds = {};
   int _selectedTab = 0;
   bool _openingCamera = false;
+  bool _refreshingDisplay = false;
 
   @override
   void initState() {
     super.initState();
     _device.addListener(_refresh);
-    if (widget.serverConfig == null) unawaited(_restoreServerConfig());
     unawaited(_initialLoad());
     if (widget.probeDevice) unawaited(_device.probeConnection());
   }
@@ -136,19 +458,19 @@ class _CompanionShellState extends State<CompanionShell> {
 
   void _refresh() => setState(() {});
 
-  Future<void> _restoreServerConfig() async {
-    final config = await _serverConfigStore.load();
+  Future<void> _refreshDisplay() async {
+    if (_refreshingDisplay) return;
+    setState(() => _refreshingDisplay = true);
+    final updated = await _device.refreshLatest();
     if (!mounted) return;
-    setState(() => _serverConfig = config);
-    unawaited(_syncFromServer());
-  }
-
-  Future<void> _saveServerConfig(ServerConfig config) async {
-    _serverConfig = config;
-    try {
-      await _serverConfigStore.save(config);
-    } catch (_) {}
-    unawaited(_syncFromServer());
+    setState(() => _refreshingDisplay = false);
+    OaToast.show(
+      context,
+      good: updated,
+      message: updated
+          ? 'The e-paper display is updating.'
+          : 'Could not update the e-paper display.',
+    );
   }
 
   Future<void> _initialLoad() async {
@@ -224,8 +546,9 @@ class _CompanionShellState extends State<CompanionShell> {
 
   Future<ProcessedPhoto> _defaultSubmit(Uint8List bytes) async {
     if (_serverReady) {
-      final uploaded =
-          await KeepServerClient(config: _serverConfig).upload(bytes);
+      final uploaded = await KeepServerClient(
+        config: _serverConfig,
+      ).upload(bytes);
       return ProcessedPhoto(
         bytes: uploaded.processedBytes,
         remoteId: uploaded.id,
@@ -253,7 +576,8 @@ class _CompanionShellState extends State<CompanionShell> {
         _moments.insert(
           0,
           LocalMoment(
-            id: treated.remoteId ??
+            id:
+                treated.remoteId ??
                 'phone-${DateTime.now().microsecondsSinceEpoch}',
             originalBytes: imageBytes,
             treatedBytes: treated.bytes,
@@ -270,7 +594,7 @@ class _CompanionShellState extends State<CompanionShell> {
           context,
           good: false,
           message: _serverReady
-              ? 'Upload failed — check the server in Settings.'
+              ? 'Upload failed — the Keep server could not be reached.'
               : 'Could not process the photo.',
         );
       }
@@ -289,7 +613,9 @@ class _CompanionShellState extends State<CompanionShell> {
         _moments.insert(
           0,
           LocalMoment(
-            id: treated.remoteId ?? 'xiao-${DateTime.now().microsecondsSinceEpoch}',
+            id:
+                treated.remoteId ??
+                'xiao-${DateTime.now().microsecondsSinceEpoch}',
             originalBytes: imageBytes,
             treatedBytes: treated.bytes,
             remoteId: treated.remoteId,
@@ -306,7 +632,7 @@ class _CompanionShellState extends State<CompanionShell> {
           context,
           good: false,
           message: _serverReady
-              ? 'Upload failed — check the server in Settings.'
+              ? 'Upload failed — the Keep server could not be reached.'
               : 'Could not process the photo.',
         );
       }
@@ -373,6 +699,14 @@ class _CompanionShellState extends State<CompanionShell> {
                       ),
                     ),
                     const Spacer(),
+                    if (widget.role == KeepRole.monisha) ...[
+                      OaIconButton(
+                        icon: Icons.refresh_rounded,
+                        tooltip: 'Refresh display',
+                        onPressed: _refreshingDisplay ? null : _refreshDisplay,
+                      ),
+                      const SizedBox(width: 4),
+                    ],
                     OaIconButton(
                       icon: Icons.settings_outlined,
                       tooltip: 'Settings',
@@ -388,12 +722,12 @@ class _CompanionShellState extends State<CompanionShell> {
                 index: _selectedTab,
                 children: [
                   HomeView(
+                    role: widget.role,
                     moments: _moments,
                     openingCamera: _openingCamera,
                     cameraConnected: _device.isConnected,
                     syncing: _syncing,
                     galleryError: _galleryError,
-                    serverReady: _serverReady,
                     deletingIds: _deletingIds,
                     onRefresh: _syncFromServer,
                     onAddPhoto: _takePhonePhoto,
@@ -401,13 +735,12 @@ class _CompanionShellState extends State<CompanionShell> {
                     onOpenMoment: _openMoment,
                   ),
                   SettingsView(
+                    role: widget.role,
+                    onRoleChanged: widget.onRoleChanged,
                     device: _device,
                     isActive: _selectedTab == 1,
                     onBack: () => _selectTab(0),
                     onCapture: _captureBoardPhoto,
-                    serverConfig: _serverConfig,
-                    onSaveServerConfig: (config) =>
-                        unawaited(_saveServerConfig(config)),
                   ),
                 ],
               ),
@@ -421,12 +754,12 @@ class _CompanionShellState extends State<CompanionShell> {
 
 class HomeView extends StatelessWidget {
   const HomeView({
+    required this.role,
     required this.moments,
     required this.openingCamera,
     required this.cameraConnected,
     required this.syncing,
     required this.galleryError,
-    required this.serverReady,
     required this.deletingIds,
     required this.onRefresh,
     required this.onAddPhoto,
@@ -435,12 +768,12 @@ class HomeView extends StatelessWidget {
     super.key,
   });
 
+  final KeepRole role;
   final List<LocalMoment> moments;
   final bool openingCamera;
   final bool cameraConnected;
   final bool syncing;
   final String? galleryError;
-  final bool serverReady;
   final Set<String> deletingIds;
   final Future<void> Function() onRefresh;
   final VoidCallback onAddPhoto;
@@ -449,6 +782,7 @@ class HomeView extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final isMonisha = role == KeepRole.monisha;
     final left = <LocalMoment>[];
     final right = <LocalMoment>[];
     for (var index = 0; index < moments.length; index++) {
@@ -465,60 +799,47 @@ class HomeView extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Row(
-              children: [
-                const Text(
-                  'Moments',
-                  style: TextStyle(
-                    fontSize: 20,
-                    fontWeight: FontWeight.w500,
-                    letterSpacing: -0.3,
-                    color: Oa.ink,
+            if (!isMonisha) ...[
+              Row(
+                mainAxisAlignment: MainAxisAlignment.end,
+                children: [
+                  if (syncing) ...[
+                    const SizedBox(
+                      width: 14,
+                      height: 14,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    ),
+                    const SizedBox(width: 10),
+                  ],
+                  OaButton(
+                    label: '+ Photo',
+                    tooltip: 'Take a photo',
+                    loading: openingCamera,
+                    onPressed: onAddPhoto,
                   ),
-                ),
-                const Spacer(),
-                if (syncing) ...[
-                  const SizedBox(
-                    width: 14,
-                    height: 14,
-                    child: CircularProgressIndicator(strokeWidth: 2),
-                  ),
-                  const SizedBox(width: 10),
                 ],
-                OaButton(
-                  label: '+ Photo',
-                  tooltip: 'Take a photo',
-                  loading: openingCamera,
-                  onPressed: onAddPhoto,
-                ),
-              ],
-            ),
-            const SizedBox(height: 16),
-            if (!cameraConnected)
+              ),
+              const SizedBox(height: 16),
+            ],
+            if (!cameraConnected && !isMonisha)
               OaNoticeStrip(
                 claim: 'No camera connected.',
                 sentence: 'Capture from the XIAO once it joins your Wi-Fi.',
                 actionLabel: 'Check connection',
                 onAction: onOpenConnection,
               ),
-            if (!serverReady && !syncing)
-              OaNoticeStrip(
-                claim: 'Server not set up.',
-                sentence: 'Add the URL and token in Settings to sync photos.',
-                actionLabel: 'Open Settings',
-                onAction: onOpenConnection,
-              )
-            else if (galleryError != null)
+            if (galleryError != null)
               OaNoticeStrip(
                 claim: galleryError!,
                 sentence: 'Showing photos from the last successful sync.',
                 actionLabel: 'Retry',
                 onAction: () => onRefresh(),
               ),
+            if (galleryError != null) const SizedBox(height: 16),
             if (moments.isEmpty)
               syncing
                   ? const _GallerySkeleton()
-                  : _EmptyGallery(onAddPhoto: onAddPhoto)
+                  : _EmptyGallery(role: role, onAddPhoto: onAddPhoto)
             else ...[
               Row(
                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -549,8 +870,9 @@ class HomeView extends StatelessWidget {
 }
 
 class _EmptyGallery extends StatelessWidget {
-  const _EmptyGallery({required this.onAddPhoto});
+  const _EmptyGallery({required this.role, required this.onAddPhoto});
 
+  final KeepRole role;
   final VoidCallback onAddPhoto;
 
   @override
@@ -569,16 +891,17 @@ class _EmptyGallery extends StatelessWidget {
               ),
             ),
             const SizedBox(height: 6),
-            const Text(
-              'Take the first one from your phone.',
+            Text(
+              role == KeepRole.tarun
+                  ? 'Take the first one from your phone.'
+                  : 'New moments will appear here when they arrive.',
               textAlign: TextAlign.center,
               style: TextStyle(fontSize: 13, color: Oa.mutedFg),
             ),
-            const SizedBox(height: 20),
-            OaButton(
-              label: 'Take a photo',
-              onPressed: onAddPhoto,
-            ),
+            if (role == KeepRole.tarun) ...[
+              const SizedBox(height: 20),
+              OaButton(label: 'Take a photo', onPressed: onAddPhoto),
+            ],
           ],
         ),
       ),
@@ -650,9 +973,7 @@ class _GalleryTile extends StatelessWidget {
                   _MomentVisual(moment: moment),
                   if (deleting) ...[
                     const Positioned.fill(
-                      child: ColoredBox(
-                        color: Color(0xA6FFFFFF),
-                      ),
+                      child: ColoredBox(color: Color(0xA6FFFFFF)),
                     ),
                     const SizedBox(
                       width: 26,
@@ -676,25 +997,19 @@ class _GallerySkeleton extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     Widget tile() => AspectRatio(
-          aspectRatio: 0.78,
-          child: DecoratedBox(
-            decoration: ShapeDecoration(
-              color: Oa.card,
-              shape: const SquircleBorder(side: BorderSide(color: Oa.border)),
-            ),
-          ),
-        );
+      aspectRatio: 0.78,
+      child: DecoratedBox(
+        decoration: ShapeDecoration(
+          color: Oa.card,
+          shape: const SquircleBorder(side: BorderSide(color: Oa.border)),
+        ),
+      ),
+    );
     return Row(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Expanded(
-          child: Column(
-            children: [
-              tile(),
-              const SizedBox(height: 12),
-              tile(),
-            ],
-          ),
+          child: Column(children: [tile(), const SizedBox(height: 12), tile()]),
         ),
         const SizedBox(width: 12),
         Expanded(
@@ -714,21 +1029,21 @@ class _GallerySkeleton extends StatelessWidget {
 
 class SettingsView extends StatefulWidget {
   const SettingsView({
+    required this.role,
+    required this.onRoleChanged,
     required this.device,
     required this.isActive,
     required this.onBack,
     required this.onCapture,
-    required this.serverConfig,
-    required this.onSaveServerConfig,
     super.key,
   });
 
+  final KeepRole role;
+  final ValueChanged<KeepRole> onRoleChanged;
   final DeviceController device;
   final bool isActive;
   final VoidCallback onBack;
   final Future<bool> Function() onCapture;
-  final ServerConfig serverConfig;
-  final ValueChanged<ServerConfig> onSaveServerConfig;
 
   @override
   State<SettingsView> createState() => _SettingsViewState();
@@ -737,36 +1052,38 @@ class SettingsView extends StatefulWidget {
 class _SettingsViewState extends State<SettingsView> {
   static const _wifiSsidKey = 'board_wifi_ssid';
   static const _wifiPasswordKey = 'board_wifi_password';
+  static const _wakeTimeKey = 'board_wake_time';
 
   final _wifiName = TextEditingController();
   final _wifiPassword = TextEditingController();
-  final _serverUrl = TextEditingController();
-  final _serverToken = TextEditingController();
   final _wifiStorage = FlutterSecureStorage();
   bool _wifiSaved = false;
   bool _wifiSaving = false;
   bool _wifiResetting = false;
   String? _wifiMessage;
   bool? _wifiGood;
-  bool _serverSaved = false;
   bool _liveCapture = false;
   bool _capturing = false;
+  TimeOfDay? _wakeTime;
+  bool _scheduleSaving = false;
+  String? _scheduleMessage;
+  bool? _scheduleGood;
+  bool _demoStarting = false;
+  bool _demoStopping = false;
+  String? _demoMessage;
 
   @override
   void dispose() {
     _wifiName.dispose();
     _wifiPassword.dispose();
-    _serverUrl.dispose();
-    _serverToken.dispose();
     super.dispose();
   }
 
   @override
   void initState() {
     super.initState();
-    _serverUrl.text = widget.serverConfig.url;
-    _serverToken.text = widget.serverConfig.token;
     unawaited(_restoreWifiCredentials());
+    unawaited(_restoreWakeTime());
   }
 
   Future<void> _restoreWifiCredentials() async {
@@ -779,6 +1096,21 @@ class _SettingsViewState extends State<SettingsView> {
       _wifiName.text = values[0] ?? '';
       _wifiPassword.text = values[1] ?? '';
       setState(() {});
+    } catch (_) {}
+  }
+
+  Future<void> _restoreWakeTime() async {
+    try {
+      final value = await _wifiStorage.read(key: _wakeTimeKey);
+      if (value == null) return;
+      final parts = value.split(':');
+      if (parts.length != 2) return;
+      final hour = int.tryParse(parts[0]);
+      final minute = int.tryParse(parts[1]);
+      if (hour == null || minute == null || hour > 23 || minute > 59) return;
+      if (mounted) {
+        setState(() => _wakeTime = TimeOfDay(hour: hour, minute: minute));
+      }
     } catch (_) {}
   }
 
@@ -810,7 +1142,50 @@ class _SettingsViewState extends State<SettingsView> {
             ],
           ),
           const SizedBox(height: 24),
-          const OaSectionHeading('Device', 'The keychain camera and its live feed.'),
+          const OaSectionHeading(
+            'Your experience',
+            'Choose which side of the shared wall this app is for.',
+          ),
+          const SizedBox(height: 10),
+          OaPanel(
+            child: Row(
+              children: [
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        '${widget.role.label} mode',
+                        style: const TextStyle(
+                          fontSize: 14,
+                          fontWeight: FontWeight.w500,
+                          color: Oa.fg80,
+                        ),
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        widget.role.subtitle,
+                        style: const TextStyle(fontSize: 12, color: Oa.mutedFg),
+                      ),
+                    ],
+                  ),
+                ),
+                OaButton(
+                  label: 'Switch to ${widget.role.other.label}',
+                  variant: OaButtonVariant.secondary,
+                  size: OaButtonSize.xs,
+                  onPressed: () => widget.onRoleChanged(widget.role.other),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 24),
+          OaSectionHeading(
+            'Device',
+            widget.role == KeepRole.monisha
+                ? 'The e-paper display and its latest image.'
+                : 'The keychain camera and its live feed.',
+          ),
           const SizedBox(height: 10),
           OaPanel(
             child: Column(
@@ -831,8 +1206,10 @@ class _SettingsViewState extends State<SettingsView> {
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          const Text(
-                            'Keychain camera',
+                          Text(
+                            widget.role == KeepRole.monisha
+                                ? 'E-paper display'
+                                : 'Keychain camera',
                             style: TextStyle(
                               fontSize: 14,
                               fontWeight: FontWeight.w500,
@@ -873,6 +1250,173 @@ class _SettingsViewState extends State<SettingsView> {
               ],
             ),
           ),
+          if (widget.role == KeepRole.monisha) ...[
+            const SizedBox(height: 24),
+            const OaSectionHeading(
+              'Wake schedule',
+              'Choose when the e-paper should wake, update, and sleep again.',
+            ),
+            const SizedBox(height: 10),
+            if (_scheduleMessage != null) ...[
+              OaNoticeStrip(
+                claim: _scheduleMessage!,
+                sentence: _scheduleSentence,
+              ),
+              const SizedBox(height: 10),
+            ],
+            OaPanel(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            const Text(
+                              'Daily e-paper refresh',
+                              style: TextStyle(
+                                fontSize: 14,
+                                fontWeight: FontWeight.w500,
+                                color: Oa.fg80,
+                              ),
+                            ),
+                            const SizedBox(height: 2),
+                            Text(
+                              _displayedWakeTime == null
+                                  ? 'No time saved yet.'
+                                  : 'Wakes daily at ${_displayedWakeTime!.format(context)}',
+                              style: const TextStyle(
+                                fontSize: 12,
+                                color: Oa.mutedFg,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      OaButton(
+                        label: _displayedWakeTime == null
+                            ? 'Choose time'
+                            : 'Change',
+                        variant: OaButtonVariant.secondary,
+                        size: OaButtonSize.xs,
+                        loading: _scheduleSaving,
+                        onPressed: !connected || _scheduleSaving
+                            ? null
+                            : _chooseWakeTime,
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 12),
+                  const Text(
+                    'The board sleeps between refreshes. Press the board button once to wake it immediately; hold it for 3 seconds to reset Wi-Fi.',
+                    style: TextStyle(
+                      fontSize: 12,
+                      height: 1.45,
+                      color: Oa.mutedFg,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 24),
+            const OaSectionHeading(
+              'Slideshow',
+              'Run the temporary six-image sequence on the e-paper.',
+            ),
+            const SizedBox(height: 10),
+            if (_demoMessage != null) ...[
+              OaNoticeStrip(
+                claim: _demoMessage!,
+                sentence:
+                    'Wake the board with one button press before starting it.',
+              ),
+              const SizedBox(height: 10),
+            ],
+            OaPanel(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            const Text(
+                              'Six-frame demo',
+                              style: TextStyle(
+                                fontSize: 14,
+                                fontWeight: FontWeight.w500,
+                                color: Oa.fg80,
+                              ),
+                            ),
+                            const SizedBox(height: 2),
+                            Text(
+                              widget.device.demoMode
+                                  ? 'Running · changes every 20 seconds'
+                                  : 'Stopped · normal scheduled mode is active',
+                              style: const TextStyle(
+                                fontSize: 12,
+                                color: Oa.mutedFg,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      Text(
+                        widget.device.demoMode ? 'RUNNING' : 'STOPPED',
+                        style: TextStyle(
+                          fontSize: 11,
+                          fontWeight: FontWeight.w500,
+                          letterSpacing: 0.5,
+                          color: widget.device.demoMode
+                              ? Oa.successText
+                              : Oa.mutedFg,
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 12),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: OaButton(
+                          label: 'Start slideshow',
+                          loading: _demoStarting,
+                          onPressed:
+                              !connected ||
+                                  widget.device.demoMode ||
+                                  _demoStarting ||
+                                  _demoStopping
+                              ? null
+                              : _startSlideshow,
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: OaButton(
+                          label: 'Stop',
+                          variant: OaButtonVariant.secondary,
+                          loading: _demoStopping,
+                          onPressed:
+                              !connected ||
+                                  !widget.device.demoMode ||
+                                  _demoStarting ||
+                                  _demoStopping
+                              ? null
+                              : _stopSlideshow,
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ],
           const SizedBox(height: 12),
           OaPanel(
             child: Column(
@@ -925,51 +1469,13 @@ class _SettingsViewState extends State<SettingsView> {
             ),
           ),
           const SizedBox(height: 24),
-          const OaSectionHeading('Battery', 'Board power reporting is not wired up yet.'),
-          const SizedBox(height: 10),
-          const OaPanel(
-            child: Row(
-              children: [
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        'Board battery',
-                        style: TextStyle(
-                          fontSize: 14,
-                          fontWeight: FontWeight.w500,
-                          color: Oa.fg80,
-                        ),
-                      ),
-                      SizedBox(height: 2),
-                      Text(
-                        'No voltage sensor or battery gauge is connected yet.',
-                        style: TextStyle(fontSize: 12, color: Oa.mutedFg),
-                      ),
-                    ],
-                  ),
-                ),
-                Text(
-                  'UNAVAILABLE',
-                  style: TextStyle(
-                    fontSize: 11,
-                    fontWeight: FontWeight.w500,
-                    letterSpacing: 0.5,
-                    color: Oa.mutedFg,
-                  ),
-                ),
-              ],
-            ),
+          const OaSectionHeading(
+            'Board Wi-Fi',
+            'Provision the board onto your home network.',
           ),
-          const SizedBox(height: 24),
-          const OaSectionHeading('Board Wi-Fi', 'Provision the board onto your home network.'),
           const SizedBox(height: 10),
           if (_wifiMessage != null) ...[
-            OaNoticeStrip(
-              claim: _wifiMessage!,
-              sentence: _wifiSentence,
-            ),
+            OaNoticeStrip(claim: _wifiMessage!, sentence: _wifiSentence),
             const SizedBox(height: 10),
           ],
           OaPanel(
@@ -1005,14 +1511,14 @@ class _SettingsViewState extends State<SettingsView> {
                   label: _wifiSaving
                       ? 'Saving to board…'
                       : _wifiSaved
-                          ? 'Saved on board'
-                          : 'Save Wi-Fi details',
+                      ? 'Saved on board'
+                      : 'Save Wi-Fi details',
                   loading: _wifiSaving,
                   expand: true,
                   onPressed:
                       _wifiName.text.trim().isEmpty || _wifiSaving || _wifiSaved
-                          ? null
-                          : _saveWifi,
+                      ? null
+                      : _saveWifi,
                 ),
                 const SizedBox(height: 8),
                 OaButton(
@@ -1027,60 +1533,11 @@ class _SettingsViewState extends State<SettingsView> {
                 const SizedBox(height: 8),
                 const Text(
                   'The board will reboot and use these credentials next time. Reconnect your phone to the same Wi-Fi, then check the connection.',
-                  style: TextStyle(fontSize: 12, height: 1.45, color: Oa.mutedFg),
-                ),
-              ],
-            ),
-          ),
-          const SizedBox(height: 24),
-          const OaSectionHeading('Server', 'Photos upload here right after capture.'),
-          const SizedBox(height: 10),
-          OaPanel(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                TextField(
-                  controller: _serverUrl,
-                  keyboardType: TextInputType.url,
-                  decoration: const InputDecoration(
-                    labelText: 'Server URL',
-                    hintText: 'http://your-server:8400',
+                  style: TextStyle(
+                    fontSize: 12,
+                    height: 1.45,
+                    color: Oa.mutedFg,
                   ),
-                  onChanged: (_) => setState(() => _serverSaved = false),
-                ),
-                const SizedBox(height: 10),
-                TextField(
-                  controller: _serverToken,
-                  obscureText: true,
-                  decoration: const InputDecoration(
-                    labelText: 'Access token',
-                    hintText: 'Shared secret',
-                  ),
-                  onChanged: (_) => setState(() => _serverSaved = false),
-                ),
-                const SizedBox(height: 12),
-                OaButton(
-                  label: _serverSaved ? 'Saved on this phone' : 'Save server details',
-                  expand: true,
-                  onPressed: _serverUrl.text.trim().isEmpty ||
-                          _serverToken.text.trim().isEmpty ||
-                          _serverSaved
-                      ? null
-                      : () {
-                          widget.onSaveServerConfig(
-                            ServerConfig(
-                              url: _serverUrl.text.trim(),
-                              token: _serverToken.text.trim(),
-                            ),
-                          );
-                          setState(() => _serverSaved = true);
-                        },
-                ),
-                const SizedBox(height: 8),
-                Text(
-                  _serverConfigStatus,
-                  style: const TextStyle(
-                      fontSize: 12, height: 1.45, color: Oa.mutedFg),
                 ),
               ],
             ),
@@ -1090,12 +1547,81 @@ class _SettingsViewState extends State<SettingsView> {
     );
   }
 
-  String get _serverConfigStatus {
-    final configured =
-        _serverUrl.text.trim().isNotEmpty && _serverToken.text.trim().isNotEmpty;
-    return configured
-        ? 'New captures are processed on the server and shown as Treated.'
-        : 'Add a URL and token to upload captures for processing.';
+  TimeOfDay? get _displayedWakeTime {
+    final local = _wakeTime;
+    if (local != null) return local;
+    final epoch = widget.device.wakeEpoch;
+    if (epoch == null) return null;
+    return TimeOfDay.fromDateTime(
+      DateTime.fromMillisecondsSinceEpoch(epoch * 1000, isUtc: true).toLocal(),
+    );
+  }
+
+  String get _scheduleSentence {
+    if (_scheduleGood == true) {
+      return 'The board will wake at this time, fetch the latest image, and sleep again.';
+    }
+    return 'Wake the board with one button press before changing this schedule.';
+  }
+
+  Future<void> _chooseWakeTime() async {
+    final picked = await showTimePicker(
+      context: context,
+      initialTime: _displayedWakeTime ?? TimeOfDay.now(),
+    );
+    if (picked == null || !mounted) return;
+    setState(() {
+      _scheduleSaving = true;
+      _scheduleMessage = null;
+    });
+    final saved = await widget.device.saveWakeTime(picked);
+    if (saved) {
+      try {
+        await _wifiStorage.write(
+          key: _wakeTimeKey,
+          value: '${picked.hour}:${picked.minute.toString().padLeft(2, '0')}',
+        );
+      } catch (_) {}
+    }
+    if (!mounted) return;
+    setState(() {
+      _scheduleSaving = false;
+      _scheduleGood = saved;
+      _scheduleMessage = saved
+          ? 'Wake schedule saved.'
+          : 'Could not save wake schedule.';
+      if (saved) _wakeTime = picked;
+    });
+  }
+
+  Future<void> _startSlideshow() async {
+    setState(() {
+      _demoStarting = true;
+      _demoMessage = null;
+    });
+    final started = await widget.device.startSlideshow();
+    if (!mounted) return;
+    setState(() {
+      _demoStarting = false;
+      _demoMessage = started
+          ? 'Slideshow started.'
+          : 'Could not start slideshow.';
+    });
+  }
+
+  Future<void> _stopSlideshow() async {
+    setState(() {
+      _demoStopping = true;
+      _demoMessage = null;
+    });
+    final stopped = await widget.device.stopSlideshow();
+    if (!mounted) return;
+    setState(() {
+      _demoStopping = false;
+      _demoMessage = stopped
+          ? 'Slideshow stopped. Normal schedule is active again.'
+          : 'Could not stop slideshow.';
+    });
   }
 
   String get _wifiSentence {
@@ -1149,8 +1675,8 @@ class _SettingsViewState extends State<SettingsView> {
       _wifiMessage = !saved
           ? 'Could not save Wi-Fi credentials.'
           : storedOnPhone
-              ? 'Saved on the board and this phone.'
-              : 'Saved on the board.';
+          ? 'Saved on the board and this phone.'
+          : 'Saved on the board.';
     });
   }
 
@@ -1182,8 +1708,8 @@ class _SettingsViewState extends State<SettingsView> {
       _wifiMessage = !reset
           ? 'Could not reset the board.'
           : clearedOnPhone
-              ? 'Board Wi-Fi was reset.'
-              : 'Board Wi-Fi was reset.';
+          ? 'Board Wi-Fi was reset.'
+          : 'Board Wi-Fi was reset.';
     });
   }
 
@@ -1209,6 +1735,8 @@ class DeviceController extends ChangeNotifier {
   bool isConnected = false;
   String connectionMode = 'unknown';
   String? ipAddress;
+  int? wakeEpoch;
+  bool demoMode = false;
 
   String get streamUrl =>
       Uri.parse(_baseUrl).replace(port: 82, path: '/stream').toString();
@@ -1231,6 +1759,8 @@ class DeviceController extends ChangeNotifier {
     isConnected = false;
     connectionMode = 'unknown';
     ipAddress = null;
+    wakeEpoch = null;
+    demoMode = false;
     notifyListeners();
   }
 
@@ -1261,10 +1791,110 @@ class DeviceController extends ChangeNotifier {
     }
   }
 
+  Future<bool> saveServerConfig({
+    required String url,
+    required String token,
+  }) async {
+    final client = HttpClient()..connectionTimeout = const Duration(seconds: 3);
+    try {
+      final request = await client.postUrl(
+        Uri.parse('$_baseUrl/server/config'),
+      );
+      request.headers.contentType = ContentType(
+        'application',
+        'x-www-form-urlencoded',
+        charset: 'utf-8',
+      );
+      final body = utf8.encode(
+        Uri(queryParameters: {'url': url, 'token': token}).query,
+      );
+      request.headers.contentLength = body.length;
+      request.add(body);
+      final response = await request.close();
+      await response.drain<void>();
+      return response.statusCode == HttpStatus.ok;
+    } catch (_) {
+      return false;
+    } finally {
+      client.close(force: true);
+    }
+  }
+
+  Future<bool> refreshLatest() async {
+    final client = HttpClient()..connectionTimeout = const Duration(seconds: 5);
+    try {
+      final request = await client.getUrl(Uri.parse('$_baseUrl/refresh'));
+      final response = await request.close();
+      await response.drain<void>();
+      return response.statusCode == HttpStatus.ok ||
+          response.statusCode == HttpStatus.accepted;
+    } catch (_) {
+      return false;
+    } finally {
+      client.close(force: true);
+    }
+  }
+
+  Future<bool> saveWakeTime(TimeOfDay time) async {
+    final client = HttpClient()..connectionTimeout = const Duration(seconds: 3);
+    try {
+      final request = await client.postUrl(Uri.parse('$_baseUrl/schedule'));
+      request.headers.contentType = ContentType(
+        'application',
+        'x-www-form-urlencoded',
+        charset: 'utf-8',
+      );
+      final epoch = _nextWakeEpoch(time);
+      final body = utf8.encode(
+        Uri(queryParameters: {'wake_epoch': '$epoch'}).query,
+      );
+      request.headers.contentLength = body.length;
+      request.add(body);
+      final response = await request.close();
+      await response.drain<void>();
+      if (response.statusCode != HttpStatus.ok) return false;
+      wakeEpoch = epoch;
+      notifyListeners();
+      return true;
+    } catch (_) {
+      return false;
+    } finally {
+      client.close(force: true);
+    }
+  }
+
   Future<bool> resetWifiCredentials() async {
     final client = HttpClient()..connectionTimeout = const Duration(seconds: 3);
     try {
       final request = await client.postUrl(Uri.parse('$_baseUrl/wifi/reset'));
+      final response = await request.close();
+      await response.drain<void>();
+      return response.statusCode == HttpStatus.ok;
+    } catch (_) {
+      return false;
+    } finally {
+      client.close(force: true);
+    }
+  }
+
+  Future<bool> startSlideshow() async {
+    final ok = await _postCommand('/demo/start');
+    if (ok) demoMode = true;
+    if (ok) notifyListeners();
+    return ok;
+  }
+
+  Future<bool> stopSlideshow() async {
+    final ok = await _postCommand('/demo/stop');
+    if (ok) demoMode = false;
+    if (ok) notifyListeners();
+    return ok;
+  }
+
+  Future<bool> _postCommand(String path) async {
+    final client = HttpClient()..connectionTimeout = const Duration(seconds: 3);
+    try {
+      final request = await client.postUrl(Uri.parse('$_baseUrl$path'));
       final response = await request.close();
       await response.drain<void>();
       return response.statusCode == HttpStatus.ok;
@@ -1311,6 +1941,9 @@ class DeviceController extends ChangeNotifier {
       if (status is! Map<String, dynamic>) return false;
       connectionMode = status['mode'] as String? ?? 'unknown';
       ipAddress = status['ip'] as String?;
+      final epoch = status['wake_epoch'];
+      wakeEpoch = epoch is num ? epoch.toInt() : null;
+      demoMode = status['demo_mode'] as bool? ?? false;
       return true;
     } catch (_) {
       return false;
@@ -1452,14 +2085,14 @@ class LocalMoment {
   }
 
   Map<String, dynamic> toJson() => {
-        'id': id,
-        'capturedAt': capturedAt.toIso8601String(),
-        if (originalAsset != null) 'originalAsset': originalAsset,
-        if (treatedAsset != null) 'treatedAsset': treatedAsset,
-        if (originalPath != null) 'originalPath': originalPath,
-        if (treatedPath != null) 'treatedPath': treatedPath,
-        if (remoteId != null) 'remoteId': remoteId,
-      };
+    'id': id,
+    'capturedAt': capturedAt.toIso8601String(),
+    if (originalAsset != null) 'originalAsset': originalAsset,
+    if (treatedAsset != null) 'treatedAsset': treatedAsset,
+    if (originalPath != null) 'originalPath': originalPath,
+    if (treatedPath != null) 'treatedPath': treatedPath,
+    if (remoteId != null) 'remoteId': remoteId,
+  };
 
   factory LocalMoment.fromJson(Map<String, dynamic> json) {
     return LocalMoment(
@@ -1689,7 +2322,11 @@ class _MomentDetailPageState extends State<MomentDetailPage> {
             widget.moment.remoteId == null
                 ? 'This removes it from this phone.'
                 : 'This removes it from the server and every device.',
-            style: const TextStyle(fontSize: 13, height: 1.45, color: Oa.mutedFg),
+            style: const TextStyle(
+              fontSize: 13,
+              height: 1.45,
+              color: Oa.mutedFg,
+            ),
           ),
           OaModalFooter(
             backLabel: 'Back',
