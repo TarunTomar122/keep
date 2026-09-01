@@ -13,6 +13,7 @@ import 'package:path_provider/path_provider.dart';
 import 'design/oa.dart';
 import 'image_processor.dart';
 import 'keep_server.dart';
+import 'latest_moment_widget.dart';
 import 'mjpeg_stream.dart';
 
 typedef PhonePhotoPicker = Future<Uint8List?> Function();
@@ -485,6 +486,7 @@ class _CompanionShellState extends State<CompanionShell> {
       final stored = await _momentStore.load();
       if (!mounted || stored.isEmpty) return;
       setState(() => _moments.addAll(stored));
+      unawaited(_refreshLatestMomentWidget());
     } catch (_) {}
     await _syncFromServer();
   }
@@ -509,6 +511,7 @@ class _CompanionShellState extends State<CompanionShell> {
           ..addAll(synced);
       });
       await _momentStore.save(_moments);
+      unawaited(_refreshLatestMomentWidget());
     } catch (_) {
       if (mounted && _galleryError == null) {
         setState(() => _galleryError = 'Could not reach the server.');
@@ -543,12 +546,32 @@ class _CompanionShellState extends State<CompanionShell> {
     );
   }
 
-  void _persistMoments() => unawaited(_saveMoments());
+  void _persistMoments() {
+    unawaited(_saveMoments());
+    unawaited(_refreshLatestMomentWidget());
+  }
 
   Future<void> _saveMoments() async {
     try {
       await _momentStore.save(_moments);
     } catch (_) {}
+  }
+
+  Future<void> _refreshLatestMomentWidget() async {
+    final moment = _moments.isEmpty ? null : _moments.first;
+    await updateLatestMomentWidget(await _momentImageBytes(moment));
+  }
+
+  Future<Uint8List?> _momentImageBytes(LocalMoment? moment) async {
+    if (moment == null) return null;
+    if (moment.treatedBytes != null) return moment.treatedBytes;
+    final path = moment.treatedPath ?? moment.originalPath;
+    if (path == null) return null;
+    try {
+      return await File(path).readAsBytes();
+    } catch (_) {
+      return null;
+    }
   }
 
   Future<ProcessedPhoto> _defaultSubmit(Uint8List bytes) async {
@@ -674,10 +697,12 @@ class _CompanionShellState extends State<CompanionShell> {
       });
       await _imageCache.removeForId(remoteId);
       await _momentStore.delete(moment, _moments);
+      unawaited(_refreshLatestMomentWidget());
       return;
     }
     setState(() => _moments.removeWhere((item) => item.id == moment.id));
     await _momentStore.delete(moment, _moments);
+    unawaited(_refreshLatestMomentWidget());
   }
 
   void _selectTab(int tab) => setState(() => _selectedTab = tab);
@@ -1264,6 +1289,44 @@ class _SettingsViewState extends State<SettingsView> {
                   variant: OaButtonVariant.secondary,
                   size: OaButtonSize.xs,
                   onPressed: () => widget.onRoleChanged(widget.role.other),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 24),
+          const OaSectionHeading(
+            'Home Screen Widget',
+            'Keep the latest moment visible without opening the app.',
+          ),
+          const SizedBox(height: 10),
+          OaPanel(
+            child: Row(
+              children: [
+                const Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'Latest moment',
+                        style: TextStyle(
+                          fontSize: 14,
+                          fontWeight: FontWeight.w500,
+                          color: Oa.fg80,
+                        ),
+                      ),
+                      SizedBox(height: 2),
+                      Text(
+                        'Add a widget that shows the newest photo.',
+                        style: TextStyle(fontSize: 12, color: Oa.mutedFg),
+                      ),
+                    ],
+                  ),
+                ),
+                OaButton(
+                  label: 'Add widget',
+                  variant: OaButtonVariant.secondary,
+                  size: OaButtonSize.xs,
+                  onPressed: () => unawaited(requestPinLatestMomentWidget()),
                 ),
               ],
             ),
