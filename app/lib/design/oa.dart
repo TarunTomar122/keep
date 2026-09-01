@@ -47,11 +47,31 @@ class Oa {
     BoxShadow(color: Color(0x14000000), offset: Offset(0, 8), blurRadius: 24),
   ];
 
-  static const panelSpring = SpringDescription(mass: 1, stiffness: 550, damping: 38);
-  static const layoutSpring = SpringDescription(mass: 1, stiffness: 550, damping: 40);
-  static const popSpring = SpringDescription(mass: 1, stiffness: 400, damping: 26);
-  static const popExitSpring = SpringDescription(mass: 1, stiffness: 380, damping: 28);
-  static const bannerSpring = SpringDescription(mass: 1, stiffness: 400, damping: 30);
+  static const panelSpring = SpringDescription(
+    mass: 1,
+    stiffness: 550,
+    damping: 38,
+  );
+  static const layoutSpring = SpringDescription(
+    mass: 1,
+    stiffness: 550,
+    damping: 40,
+  );
+  static const popSpring = SpringDescription(
+    mass: 1,
+    stiffness: 400,
+    damping: 26,
+  );
+  static const popExitSpring = SpringDescription(
+    mass: 1,
+    stiffness: 380,
+    damping: 28,
+  );
+  static const bannerSpring = SpringDescription(
+    mass: 1,
+    stiffness: 400,
+    damping: 30,
+  );
 }
 
 Path oaSquirclePath(Rect rect, double radius, double handle) {
@@ -75,14 +95,16 @@ Path oaSquirclePath(Rect rect, double radius, double handle) {
 }
 
 class OaSquircleClipper extends CustomClipper<Path> {
-  const OaSquircleClipper({this.radius = Oa.insetRadius, this.handle = Oa.insetHandle});
+  const OaSquircleClipper({
+    this.radius = Oa.insetRadius,
+    this.handle = Oa.insetHandle,
+  });
 
   final double radius;
   final double handle;
 
   @override
-  Path getClip(Size size) =>
-      oaSquirclePath(Offset.zero & size, radius, handle);
+  Path getClip(Size size) => oaSquirclePath(Offset.zero & size, radius, handle);
 
   @override
   bool shouldReclip(OaSquircleClipper oldClipper) =>
@@ -107,10 +129,10 @@ class SquircleBorder extends ShapeBorder {
 
   @override
   ShapeBorder scale(double t) => SquircleBorder(
-        radius: radius * t,
-        handle: handle * t,
-        side: side.scale(t),
-      );
+    radius: radius * t,
+    handle: handle * t,
+    side: side.scale(t),
+  );
 
   @override
   Path getOuterPath(Rect rect, {TextDirection? textDirection}) => _path(rect);
@@ -122,10 +144,7 @@ class SquircleBorder extends ShapeBorder {
   @override
   void paint(Canvas canvas, Rect rect, {TextDirection? textDirection}) {
     if (side.style == BorderStyle.none || side.width <= 0) return;
-    canvas.drawPath(
-      _path(rect.deflate(side.width / 2)),
-      side.toPaint(),
-    );
+    canvas.drawPath(_path(rect.deflate(side.width / 2)), side.toPaint());
   }
 
   @override
@@ -193,45 +212,45 @@ class _OaButtonState extends State<OaButton> {
   }
 
   double get _height => switch (widget.size) {
-        OaButtonSize.md => 36,
-        OaButtonSize.sm => 32,
-        OaButtonSize.xs => 28,
-      };
+    OaButtonSize.md => 36,
+    OaButtonSize.sm => 32,
+    OaButtonSize.xs => 28,
+  };
 
   EdgeInsets get _padding => switch (widget.size) {
-        OaButtonSize.md => const EdgeInsets.symmetric(horizontal: 12),
-        OaButtonSize.sm => const EdgeInsets.symmetric(horizontal: 12),
-        OaButtonSize.xs => const EdgeInsets.symmetric(horizontal: 8),
-      };
+    OaButtonSize.md => const EdgeInsets.symmetric(horizontal: 12),
+    OaButtonSize.sm => const EdgeInsets.symmetric(horizontal: 12),
+    OaButtonSize.xs => const EdgeInsets.symmetric(horizontal: 8),
+  };
 
   Decoration _decoration() => switch (widget.variant) {
-        OaButtonVariant.primary => ShapeDecoration(
-            color: Oa.primaryBevel,
-            shadows: const [],
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(Oa.radiusLg),
-              side: const BorderSide(color: Oa.primaryBevelBorder),
-            ),
-          ),
-        OaButtonVariant.secondary => ShapeDecoration(
-            color: _pressed ? Oa.secondaryHover : Oa.secondary,
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(Oa.radiusLg),
-            ),
-          ),
-        OaButtonVariant.ghost => ShapeDecoration(
-            color: _pressed ? Oa.accentWash : Colors.transparent,
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(Oa.radiusLg),
-            ),
-          ),
-        OaButtonVariant.destructive => ShapeDecoration(
-            color: Oa.destructive,
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(Oa.radiusLg),
-            ),
-          ),
-      };
+    OaButtonVariant.primary => ShapeDecoration(
+      color: Oa.primaryBevel,
+      shadows: const [],
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(Oa.radiusLg),
+        side: const BorderSide(color: Oa.primaryBevelBorder),
+      ),
+    ),
+    OaButtonVariant.secondary => ShapeDecoration(
+      color: _pressed ? Oa.secondaryHover : Oa.secondary,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(Oa.radiusLg),
+      ),
+    ),
+    OaButtonVariant.ghost => ShapeDecoration(
+      color: _pressed ? Oa.accentWash : Colors.transparent,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(Oa.radiusLg),
+      ),
+    ),
+    OaButtonVariant.destructive => ShapeDecoration(
+      color: Oa.destructive,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(Oa.radiusLg),
+      ),
+    ),
+  };
 
   @override
   Widget build(BuildContext context) {
@@ -252,37 +271,39 @@ class _OaButtonState extends State<OaButton> {
     );
 
     final button = AnimatedScale(
-      scale: _pressed && !_disabled ? 0.98 : 1,
-      duration: const Duration(milliseconds: 90),
+      scale: _pressed && !_disabled ? 0.97 : 1,
+      duration: const Duration(milliseconds: 110),
       curve: Curves.easeOut,
-      child: Transform.translate(
-        offset: Offset(0, _pressed && !_disabled ? 1 : 0),
-        child: AnimatedOpacity(
-          duration: const Duration(milliseconds: 120),
-          opacity: _disabled && !widget.loading ? 0.5 : 1,
-          child: Container(
-            height: _height,
-            padding: _padding,
-            decoration: _decoration(),
-            foregroundDecoration: widget.variant == OaButtonVariant.primary
-                ? BoxDecoration(
-                    borderRadius: BorderRadius.circular(Oa.radiusLg),
-                    gradient: const LinearGradient(
-                      begin: Alignment.topCenter,
-                      end: Alignment.bottomCenter,
-                      stops: [0, 0.35, 0.65, 1],
-                      colors: [
-                        Color(0x38FFFFFF),
-                        Color(0x00000000),
-                        Color(0x00000000),
-                        Color(0x4A3A3480),
-                      ],
-                    ),
-                  )
-                : null,
-            alignment: Alignment.center,
-            child: content,
-          ),
+      child: AnimatedOpacity(
+        duration: const Duration(milliseconds: 110),
+        curve: Curves.easeOut,
+        opacity: _disabled && !widget.loading
+            ? 0.5
+            : _pressed
+            ? 0.85
+            : 1,
+        child: Container(
+          height: _height,
+          padding: _padding,
+          decoration: _decoration(),
+          foregroundDecoration: widget.variant == OaButtonVariant.primary
+              ? BoxDecoration(
+                  borderRadius: BorderRadius.circular(Oa.radiusLg),
+                  gradient: const LinearGradient(
+                    begin: Alignment.topCenter,
+                    end: Alignment.bottomCenter,
+                    stops: [0, 0.35, 0.65, 1],
+                    colors: [
+                      Color(0x38FFFFFF),
+                      Color(0x00000000),
+                      Color(0x00000000),
+                      Color(0x4A3A3480),
+                    ],
+                  ),
+                )
+              : null,
+          alignment: Alignment.center,
+          child: content,
         ),
       ),
     );
@@ -371,7 +392,11 @@ class _OaIconButtonState extends State<OaIconButton> {
 }
 
 class OaPanel extends StatelessWidget {
-  const OaPanel({required this.child, this.padding = const EdgeInsets.all(12), super.key});
+  const OaPanel({
+    required this.child,
+    this.padding = const EdgeInsets.all(12),
+    super.key,
+  });
 
   final Widget child;
   final EdgeInsetsGeometry padding;
@@ -451,12 +476,15 @@ class OaSectionHeading extends StatelessWidget {
   }
 }
 
+enum OaNoticeTone { neutral, danger }
+
 class OaNoticeStrip extends StatelessWidget {
   const OaNoticeStrip({
     required this.claim,
     this.sentence,
     this.actionLabel,
     this.onAction,
+    this.tone = OaNoticeTone.neutral,
     super.key,
   });
 
@@ -464,16 +492,19 @@ class OaNoticeStrip extends StatelessWidget {
   final String? sentence;
   final String? actionLabel;
   final VoidCallback? onAction;
+  final OaNoticeTone tone;
 
   @override
   Widget build(BuildContext context) {
+    final tint = tone == OaNoticeTone.danger
+        ? const Color(0xFFFDECEC)
+        : Oa.accentWash;
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
       decoration: ShapeDecoration(
-        color: Oa.card,
+        color: tint,
         shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(Oa.radius2xl),
-          side: const BorderSide(color: Oa.border),
         ),
       ),
       child: Row(
@@ -504,7 +535,7 @@ class OaNoticeStrip extends StatelessWidget {
             const SizedBox(width: 12),
             OaButton(
               label: actionLabel!,
-              variant: OaButtonVariant.secondary,
+              variant: OaButtonVariant.ghost,
               size: OaButtonSize.xs,
               onPressed: onAction,
             ),
@@ -576,8 +607,10 @@ class OaSegmented extends StatefulWidget {
 
 class _OaSegmentedState extends State<OaSegmented>
     with SingleTickerProviderStateMixin {
-  late final AnimationController _controller =
-      AnimationController(vsync: this, value: widget.index.toDouble());
+  late final AnimationController _controller = AnimationController(
+    vsync: this,
+    value: widget.index.toDouble(),
+  );
   late double _target = widget.index.toDouble();
 
   @override
@@ -662,10 +695,20 @@ class _OaSegmentedState extends State<OaSegmented>
   }
 }
 
+/// A centered confirmation alert in the iOS style: title, message, a
+/// hairline, then a row of plain-text actions split by a vertical divider —
+/// not a card with pill buttons crammed in a corner.
 class OaModal {
   OaModal._();
 
-  static Future<bool> show(BuildContext context, {required Widget child}) {
+  static Future<bool> show(
+    BuildContext context, {
+    required String title,
+    required String message,
+    required String actionLabel,
+    String backLabel = 'Cancel',
+    bool destructive = false,
+  }) {
     final completer = Completer<bool>();
     late OverlayEntry entry;
     final backdrop = AnimationController(
@@ -709,24 +752,88 @@ class OaModal {
               final t = panel.value;
               return Center(
                 child: Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 24),
+                  padding: const EdgeInsets.symmetric(horizontal: 40),
                   child: Opacity(
                     opacity: t.clamp(0, 1),
                     child: Transform.scale(
-                      scale: 0.96 + 0.04 * t,
+                      scale: 0.9 + 0.1 * t,
                       child: Container(
                         width: double.infinity,
-                        constraints: const BoxConstraints(maxWidth: 360),
-                        padding: const EdgeInsets.fromLTRB(20, 20, 20, 0),
-                        decoration: ShapeDecoration(
+                        constraints: const BoxConstraints(maxWidth: 320),
+                        decoration: const ShapeDecoration(
                           color: Oa.card,
                           shadows: Oa.floatingShadows,
-                          shape: const SquircleBorder(
+                          shape: SquircleBorder(
                             radius: Oa.radius2xl,
-                            handle: 3,
+                            handle: 4,
                           ),
                         ),
-                        child: child,
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Padding(
+                              padding: const EdgeInsets.fromLTRB(
+                                20,
+                                20,
+                                20,
+                                16,
+                              ),
+                              child: Column(
+                                children: [
+                                  Text(
+                                    title,
+                                    textAlign: TextAlign.center,
+                                    style: const TextStyle(
+                                      fontSize: 15,
+                                      fontWeight: FontWeight.w600,
+                                      color: Oa.ink,
+                                    ),
+                                  ),
+                                  const SizedBox(height: 6),
+                                  Text(
+                                    message,
+                                    textAlign: TextAlign.center,
+                                    style: const TextStyle(
+                                      fontSize: 13,
+                                      height: 1.4,
+                                      color: Oa.mutedFg,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                            const Divider(
+                              height: 1,
+                              thickness: 1,
+                              color: Oa.border,
+                            ),
+                            SizedBox(
+                              height: 46,
+                              child: Row(
+                                children: [
+                                  Expanded(
+                                    child: _OaModalAction(
+                                      label: backLabel,
+                                      onTap: () => close(false),
+                                    ),
+                                  ),
+                                  const VerticalDivider(
+                                    width: 1,
+                                    thickness: 1,
+                                    color: Oa.border,
+                                  ),
+                                  Expanded(
+                                    child: _OaModalAction(
+                                      label: actionLabel,
+                                      destructive: destructive,
+                                      onTap: () => close(true),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ],
+                        ),
                       ),
                     ),
                   ),
@@ -744,49 +851,33 @@ class OaModal {
   }
 }
 
-class OaModalFooter extends StatelessWidget {
-  const OaModalFooter({
-    required this.backLabel,
-    required this.actionLabel,
+class _OaModalAction extends StatelessWidget {
+  const _OaModalAction({
+    required this.label,
+    required this.onTap,
     this.destructive = false,
-    required this.onBack,
-    required this.onAction,
-    super.key,
   });
 
-  final String backLabel;
-  final String actionLabel;
+  final String label;
+  final VoidCallback onTap;
   final bool destructive;
-  final VoidCallback onBack;
-  final VoidCallback onAction;
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      margin: const EdgeInsets.only(top: 16),
-      height: 48,
-      decoration: const BoxDecoration(
-        border: Border(top: BorderSide(color: Oa.border)),
-      ),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.end,
-        children: [
-          OaButton(
-            label: backLabel,
-            variant: OaButtonVariant.secondary,
-            size: OaButtonSize.xs,
-            onPressed: onBack,
+    return Material(
+      type: MaterialType.transparency,
+      child: InkWell(
+        onTap: onTap,
+        child: Center(
+          child: Text(
+            label,
+            style: TextStyle(
+              fontSize: 15,
+              fontWeight: destructive ? FontWeight.w600 : FontWeight.w500,
+              color: destructive ? Oa.dangerText : Oa.primary,
+            ),
           ),
-          const SizedBox(width: 8),
-          OaButton(
-            label: actionLabel,
-            variant: destructive
-                ? OaButtonVariant.destructive
-                : OaButtonVariant.primary,
-            size: OaButtonSize.xs,
-            onPressed: onAction,
-          ),
-        ],
+        ),
       ),
     );
   }
@@ -825,11 +916,7 @@ class OaToast {
           child: FadeTransition(
             opacity: controller,
             child: Center(
-              child: _ToastBody(
-                good: good,
-                message: message,
-                onDone: retire,
-              ),
+              child: _ToastBody(good: good, message: message, onDone: retire),
             ),
           ),
         ),
@@ -841,7 +928,11 @@ class OaToast {
 }
 
 class _ToastBody extends StatefulWidget {
-  const _ToastBody({required this.good, required this.message, required this.onDone});
+  const _ToastBody({
+    required this.good,
+    required this.message,
+    required this.onDone,
+  });
 
   final bool good;
   final String message;
@@ -853,8 +944,10 @@ class _ToastBody extends StatefulWidget {
 
 class _ToastBodyState extends State<_ToastBody>
     with SingleTickerProviderStateMixin {
-  late final AnimationController _effect =
-      AnimationController(vsync: this, duration: const Duration(milliseconds: 320));
+  late final AnimationController _effect = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 320),
+  );
 
   @override
   void initState() {
@@ -896,10 +989,7 @@ class _ToastBodyState extends State<_ToastBody>
         }
         return Transform.translate(
           offset: Offset(dx, 0),
-          child: Transform.scale(
-            scale: scale,
-            child: child,
-          ),
+          child: Transform.scale(scale: scale, child: child),
         );
       },
       child: Container(

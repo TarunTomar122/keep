@@ -5,7 +5,10 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:image/image.dart' as img;
 
 import 'package:clippy_companion/design/oa.dart';
+import 'package:clippy_companion/keep_server.dart';
 import 'package:clippy_companion/main.dart';
+
+const _unconfiguredServer = ServerConfig(url: '', token: '');
 
 void main() {
   testWidgets('first launch asks which side of Keep this is for', (
@@ -31,6 +34,7 @@ void main() {
       ClippyCompanionApp(
         role: KeepRole.tarun,
         probeDevice: false,
+        serverConfig: _unconfiguredServer,
         imageProcessor: (bytes) async => bytes,
         phonePhotoPicker: () async {
           pickerCalls++;
@@ -43,12 +47,7 @@ void main() {
 
     final addButton = find.byTooltip('Take a photo');
     await tester.ensureVisible(addButton);
-    tester
-        .widget<OaButton>(
-          find.ancestor(of: addButton, matching: find.byType(OaButton)).first,
-        )
-        .onPressed!
-        .call();
+    await tester.tap(addButton);
     await tester.runAsync(
       () => Future<void>.delayed(const Duration(milliseconds: 200)),
     );
@@ -63,7 +62,11 @@ void main() {
 
   testWidgets('settings shows device and setup controls', (tester) async {
     await tester.pumpWidget(
-      const ClippyCompanionApp(probeDevice: false, role: KeepRole.tarun),
+      const ClippyCompanionApp(
+        probeDevice: false,
+        role: KeepRole.tarun,
+        serverConfig: _unconfiguredServer,
+      ),
     );
 
     await tester.tap(find.byTooltip('Settings'));
@@ -79,8 +82,14 @@ void main() {
 
   testWidgets('Monisha settings shows the daily wake schedule', (tester) async {
     await tester.pumpWidget(
-      const ClippyCompanionApp(probeDevice: false, role: KeepRole.monisha),
+      const ClippyCompanionApp(
+        probeDevice: false,
+        role: KeepRole.monisha,
+        serverConfig: _unconfiguredServer,
+      ),
     );
+
+    expect(find.byTooltip('Refresh display'), findsOneWidget);
 
     await tester.tap(find.byTooltip('Settings'));
     await tester.pump(const Duration(milliseconds: 200));
@@ -92,7 +101,6 @@ void main() {
     );
     expect(find.text('Six-frame demo', skipOffstage: false), findsOneWidget);
     expect(find.text('Start slideshow', skipOffstage: false), findsOneWidget);
-    expect(find.byTooltip('Refresh display'), findsOneWidget);
     expect(find.text('Server not set up.', skipOffstage: false), findsNothing);
   });
 
@@ -103,6 +111,7 @@ void main() {
       ClippyCompanionApp(
         role: KeepRole.tarun,
         probeDevice: false,
+        serverConfig: _unconfiguredServer,
         imageProcessor: (bytes) async => bytes,
         phonePhotoPicker: () async =>
             Uint8List.fromList(img.encodePng(img.Image(width: 3, height: 3))),
@@ -110,12 +119,7 @@ void main() {
     );
 
     final addButton = find.byTooltip('Take a photo');
-    tester
-        .widget<OaButton>(
-          find.ancestor(of: addButton, matching: find.byType(OaButton)).first,
-        )
-        .onPressed!
-        .call();
+    await tester.tap(addButton);
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 100));
 
@@ -138,6 +142,7 @@ void main() {
       ClippyCompanionApp(
         role: KeepRole.tarun,
         probeDevice: false,
+        serverConfig: _unconfiguredServer,
         imageProcessor: (bytes) async => bytes,
         phonePhotoPicker: () async =>
             Uint8List.fromList(img.encodePng(img.Image(width: 3, height: 3))),
@@ -149,12 +154,7 @@ void main() {
     );
 
     final addButton = find.byTooltip('Take a photo');
-    tester
-        .widget<OaButton>(
-          find.ancestor(of: addButton, matching: find.byType(OaButton)).first,
-        )
-        .onPressed!
-        .call();
+    await tester.tap(addButton);
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 100));
 

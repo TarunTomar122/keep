@@ -8,7 +8,12 @@ const kDefaultServerUrl = String.fromEnvironment(
   'KEEP_SERVER_URL',
   defaultValue: 'http://144.217.6.112:8400',
 );
-const kDefaultServerToken = String.fromEnvironment('KEEP_SERVER_TOKEN');
+const kDefaultServerToken = String.fromEnvironment(
+  'KEEP_SERVER_TOKEN',
+  // ponytail: placeholder until the real bearer token is supplied; override
+  // with --dart-define=KEEP_SERVER_TOKEN=<token> for a real build.
+  defaultValue: 'dummy-token',
+);
 
 class ServerConfig {
   const ServerConfig({required this.url, required this.token});

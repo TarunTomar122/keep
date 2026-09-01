@@ -78,6 +78,7 @@ class ClippyCompanionApp extends StatelessWidget {
     this.imageProcessor,
     this.photoSubmitter,
     this.role,
+    this.serverConfig,
     super.key,
   });
 
@@ -86,6 +87,7 @@ class ClippyCompanionApp extends StatelessWidget {
   final ImageProcessor? imageProcessor;
   final PhotoSubmitter? photoSubmitter;
   final KeepRole? role;
+  final ServerConfig? serverConfig;
 
   @override
   Widget build(BuildContext context) {
@@ -100,6 +102,7 @@ class ClippyCompanionApp extends StatelessWidget {
         home: RoleGate(
           initialRole: role,
           probeDevice: probeDevice,
+          serverConfig: serverConfig,
           phonePhotoPicker: phonePhotoPicker ?? pickPhonePhoto,
           imageProcessor: imageProcessor ?? const LocalImageProcessor().process,
           photoSubmitter: photoSubmitter,
@@ -116,6 +119,7 @@ class RoleGate extends StatefulWidget {
     required this.phonePhotoPicker,
     required this.imageProcessor,
     this.photoSubmitter,
+    this.serverConfig,
     super.key,
   });
 
@@ -124,6 +128,7 @@ class RoleGate extends StatefulWidget {
   final PhonePhotoPicker phonePhotoPicker;
   final ImageProcessor imageProcessor;
   final PhotoSubmitter? photoSubmitter;
+  final ServerConfig? serverConfig;
 
   @override
   State<RoleGate> createState() => _RoleGateState();
@@ -196,6 +201,7 @@ class _RoleGateState extends State<RoleGate> {
       phonePhotoPicker: widget.phonePhotoPicker,
       imageProcessor: widget.imageProcessor,
       photoSubmitter: widget.photoSubmitter,
+      serverConfig: widget.serverConfig,
     );
   }
 }
@@ -408,6 +414,7 @@ class CompanionShell extends StatefulWidget {
     required this.phonePhotoPicker,
     required this.imageProcessor,
     this.photoSubmitter,
+    this.serverConfig,
     super.key,
   });
 
@@ -417,6 +424,7 @@ class CompanionShell extends StatefulWidget {
   final PhonePhotoPicker phonePhotoPicker;
   final ImageProcessor imageProcessor;
   final PhotoSubmitter? photoSubmitter;
+  final ServerConfig? serverConfig;
 
   @override
   State<CompanionShell> createState() => _CompanionShellState();
@@ -427,10 +435,9 @@ class _CompanionShellState extends State<CompanionShell> {
   final List<LocalMoment> _moments = [];
   final LocalMomentStore _momentStore = LocalMomentStore();
   final ServerImageCache _imageCache = ServerImageCache();
-  final ServerConfig _serverConfig = const ServerConfig(
-    url: kDefaultServerUrl,
-    token: kDefaultServerToken,
-  );
+  late final ServerConfig _serverConfig =
+      widget.serverConfig ??
+      const ServerConfig(url: kDefaultServerUrl, token: kDefaultServerToken);
   late final PhotoSubmitter _submitPhoto =
       widget.photoSubmitter ?? _defaultSubmit;
   bool _syncing = false;
@@ -677,75 +684,45 @@ class _CompanionShellState extends State<CompanionShell> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: Colors.white,
-      body: SafeArea(
-        bottom: false,
-        child: Column(
-          children: [
-            SizedBox(
-              height: 56,
-              child: Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 16),
-                child: Row(
-                  children: [
-                    const Text(
-                      'Keep',
-                      style: TextStyle(
-                        fontSize: 15,
-                        fontWeight: FontWeight.w500,
-                        letterSpacing: -0.2,
-                        color: Oa.ink,
-                      ),
-                    ),
-                    const Spacer(),
-                    if (widget.role == KeepRole.monisha) ...[
-                      OaIconButton(
-                        icon: Icons.refresh_rounded,
-                        tooltip: 'Refresh display',
-                        onPressed: _refreshingDisplay ? null : _refreshDisplay,
-                      ),
-                      const SizedBox(width: 4),
-                    ],
-                    OaIconButton(
-                      icon: Icons.settings_outlined,
-                      tooltip: 'Settings',
-                      onPressed: () => _selectTab(1),
-                    ),
-                  ],
-                ),
+    return PopScope(
+      canPop: _selectedTab == 0,
+      onPopInvokedWithResult: (didPop, result) {
+        if (!didPop && _selectedTab != 0) _selectTab(0);
+      },
+      child: Scaffold(
+        backgroundColor: Colors.white,
+        body: SafeArea(
+          bottom: false,
+          child: IndexedStack(
+            sizing: StackFit.expand,
+            index: _selectedTab,
+            children: [
+              HomeView(
+                role: widget.role,
+                moments: _moments,
+                openingCamera: _openingCamera,
+                cameraConnected: _device.isConnected,
+                syncing: _syncing,
+                galleryError: _galleryError,
+                deletingIds: _deletingIds,
+                refreshingDisplay: _refreshingDisplay,
+                onRefresh: _syncFromServer,
+                onAddPhoto: _takePhonePhoto,
+                onOpenSettings: () => _selectTab(1),
+                onOpenConnection: () => _selectTab(1),
+                onRefreshDisplay: _refreshDisplay,
+                onOpenMoment: _openMoment,
               ),
-            ),
-            Expanded(
-              child: IndexedStack(
-                sizing: StackFit.expand,
-                index: _selectedTab,
-                children: [
-                  HomeView(
-                    role: widget.role,
-                    moments: _moments,
-                    openingCamera: _openingCamera,
-                    cameraConnected: _device.isConnected,
-                    syncing: _syncing,
-                    galleryError: _galleryError,
-                    deletingIds: _deletingIds,
-                    onRefresh: _syncFromServer,
-                    onAddPhoto: _takePhonePhoto,
-                    onOpenConnection: () => _selectTab(1),
-                    onOpenMoment: _openMoment,
-                  ),
-                  SettingsView(
-                    role: widget.role,
-                    onRoleChanged: widget.onRoleChanged,
-                    device: _device,
-                    isActive: _selectedTab == 1,
-                    onBack: () => _selectTab(0),
-                    onCapture: _captureBoardPhoto,
-                  ),
-                ],
+              SettingsView(
+                role: widget.role,
+                onRoleChanged: widget.onRoleChanged,
+                device: _device,
+                isActive: _selectedTab == 1,
+                onBack: () => _selectTab(0),
+                onCapture: _captureBoardPhoto,
               ),
-            ),
-          ],
+            ],
+          ),
         ),
       ),
     );
@@ -761,9 +738,12 @@ class HomeView extends StatelessWidget {
     required this.syncing,
     required this.galleryError,
     required this.deletingIds,
+    required this.refreshingDisplay,
     required this.onRefresh,
     required this.onAddPhoto,
+    required this.onOpenSettings,
     required this.onOpenConnection,
+    required this.onRefreshDisplay,
     required this.onOpenMoment,
     super.key,
   });
@@ -775,9 +755,12 @@ class HomeView extends StatelessWidget {
   final bool syncing;
   final String? galleryError;
   final Set<String> deletingIds;
+  final bool refreshingDisplay;
   final Future<void> Function() onRefresh;
   final VoidCallback onAddPhoto;
+  final VoidCallback onOpenSettings;
   final VoidCallback onOpenConnection;
+  final VoidCallback onRefreshDisplay;
   final ValueChanged<LocalMoment> onOpenMoment;
 
   @override
@@ -789,80 +772,170 @@ class HomeView extends StatelessWidget {
       (index.isEven ? left : right).add(moments[index]);
     }
 
-    return RefreshIndicator(
-      color: Oa.ink,
-      backgroundColor: Colors.white,
-      onRefresh: onRefresh,
-      child: SingleChildScrollView(
-        physics: const AlwaysScrollableScrollPhysics(),
-        padding: const EdgeInsets.fromLTRB(16, 8, 16, 104),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            if (!isMonisha) ...[
-              Row(
-                mainAxisAlignment: MainAxisAlignment.end,
-                children: [
-                  if (syncing) ...[
-                    const SizedBox(
-                      width: 14,
-                      height: 14,
-                      child: CircularProgressIndicator(strokeWidth: 2),
+    return Stack(
+      children: [
+        RefreshIndicator(
+          color: Oa.ink,
+          backgroundColor: Colors.white,
+          onRefresh: onRefresh,
+          child: SingleChildScrollView(
+            physics: const AlwaysScrollableScrollPhysics(),
+            padding: EdgeInsets.fromLTRB(20, 12, 20, isMonisha ? 24 : 104),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.center,
+                  children: [
+                    Text(
+                      isMonisha ? 'Wall' : 'Moments',
+                      style: const TextStyle(
+                        fontSize: 30,
+                        fontWeight: FontWeight.w700,
+                        letterSpacing: -0.6,
+                        color: Oa.ink,
+                      ),
                     ),
-                    const SizedBox(width: 10),
+                    const Spacer(),
+                    if (syncing) ...[
+                      const SizedBox(
+                        width: 16,
+                        height: 16,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      ),
+                      const SizedBox(width: 14),
+                    ],
+                    if (isMonisha) ...[
+                      OaIconButton(
+                        icon: Icons.refresh_rounded,
+                        tooltip: 'Refresh display',
+                        onPressed: refreshingDisplay ? null : onRefreshDisplay,
+                      ),
+                      const SizedBox(width: 4),
+                    ],
+                    OaIconButton(
+                      icon: Icons.settings_rounded,
+                      tooltip: 'Settings',
+                      onPressed: onOpenSettings,
+                    ),
                   ],
-                  OaButton(
-                    label: '+ Photo',
-                    tooltip: 'Take a photo',
-                    loading: openingCamera,
-                    onPressed: onAddPhoto,
-                  ),
-                ],
-              ),
-              const SizedBox(height: 16),
-            ],
-            if (!cameraConnected && !isMonisha)
-              OaNoticeStrip(
-                claim: 'No camera connected.',
-                sentence: 'Capture from the XIAO once it joins your Wi-Fi.',
-                actionLabel: 'Check connection',
-                onAction: onOpenConnection,
-              ),
-            if (galleryError != null)
-              OaNoticeStrip(
-                claim: galleryError!,
-                sentence: 'Showing photos from the last successful sync.',
-                actionLabel: 'Retry',
-                onAction: () => onRefresh(),
-              ),
-            if (galleryError != null) const SizedBox(height: 16),
-            if (moments.isEmpty)
-              syncing
-                  ? const _GallerySkeleton()
-                  : _EmptyGallery(role: role, onAddPhoto: onAddPhoto)
-            else ...[
-              Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Expanded(
-                    child: _GalleryColumn(
-                      moments: left,
-                      deletingIds: deletingIds,
-                      onOpenMoment: onOpenMoment,
+                ),
+                const SizedBox(height: 16),
+                if (!cameraConnected && !isMonisha)
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 10),
+                    child: OaNoticeStrip(
+                      claim: 'No camera connected.',
+                      sentence:
+                          'Capture from the XIAO once it joins your Wi-Fi.',
+                      actionLabel: 'Check',
+                      onAction: onOpenConnection,
                     ),
                   ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: _GalleryColumn(
-                      moments: right,
-                      deletingIds: deletingIds,
-                      onOpenMoment: onOpenMoment,
+                if (galleryError != null)
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 10),
+                    child: OaNoticeStrip(
+                      claim: galleryError!,
+                      sentence: 'Showing photos from the last successful sync.',
+                      actionLabel: 'Retry',
+                      onAction: () => onRefresh(),
+                      tone: OaNoticeTone.danger,
                     ),
                   ),
+                if (moments.isEmpty)
+                  syncing
+                      ? const _GallerySkeleton()
+                      : _EmptyGallery(role: role, onAddPhoto: onAddPhoto)
+                else ...[
+                  Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Expanded(
+                        child: _GalleryColumn(
+                          moments: left,
+                          deletingIds: deletingIds,
+                          onOpenMoment: onOpenMoment,
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: _GalleryColumn(
+                          moments: right,
+                          deletingIds: deletingIds,
+                          onOpenMoment: onOpenMoment,
+                        ),
+                      ),
+                    ],
+                  ),
                 ],
-              ),
-            ],
-          ],
+              ],
+            ),
+          ),
+        ),
+        if (!isMonisha)
+          Positioned(
+            right: 20,
+            bottom: 24,
+            child: _AddPhotoFab(loading: openingCamera, onPressed: onAddPhoto),
+          ),
+      ],
+    );
+  }
+}
+
+class _AddPhotoFab extends StatefulWidget {
+  const _AddPhotoFab({required this.loading, required this.onPressed});
+
+  final bool loading;
+  final VoidCallback onPressed;
+
+  @override
+  State<_AddPhotoFab> createState() => _AddPhotoFabState();
+}
+
+class _AddPhotoFabState extends State<_AddPhotoFab> {
+  bool _pressed = false;
+
+  @override
+  Widget build(BuildContext context) {
+    return Tooltip(
+      message: 'Take a photo',
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: widget.loading ? null : widget.onPressed,
+        onTapDown: (_) => setState(() => _pressed = true),
+        onTapUp: (_) => setState(() => _pressed = false),
+        onTapCancel: () => setState(() => _pressed = false),
+        child: AnimatedScale(
+          scale: _pressed ? 0.94 : 1,
+          duration: const Duration(milliseconds: 110),
+          curve: Curves.easeOut,
+          child: Container(
+            width: 58,
+            height: 58,
+            decoration: ShapeDecoration(
+              color: _pressed ? Oa.primaryDeep : Oa.primaryBevel,
+              shadows: Oa.floatingShadows,
+              shape: const CircleBorder(),
+            ),
+            child: widget.loading
+                ? const Center(
+                    child: SizedBox(
+                      width: 22,
+                      height: 22,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2.2,
+                        color: Colors.white,
+                      ),
+                    ),
+                  )
+                : const Icon(
+                    Icons.camera_alt_rounded,
+                    color: Colors.white,
+                    size: 24,
+                  ),
+          ),
         ),
       ),
     );
@@ -878,25 +951,41 @@ class _EmptyGallery extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 96),
+      padding: const EdgeInsets.symmetric(vertical: 80),
       child: Center(
         child: Column(
           children: [
+            Container(
+              width: 64,
+              height: 64,
+              decoration: const BoxDecoration(
+                color: Oa.accentWash,
+                shape: BoxShape.circle,
+              ),
+              child: Icon(
+                role == KeepRole.tarun
+                    ? Icons.photo_camera_outlined
+                    : Icons.collections_bookmark_outlined,
+                color: Oa.mutedFg,
+                size: 28,
+              ),
+            ),
+            const SizedBox(height: 16),
             const Text(
-              'No photos yet.',
+              'No photos yet',
               style: TextStyle(
                 fontSize: 16,
-                fontWeight: FontWeight.w500,
+                fontWeight: FontWeight.w600,
                 color: Oa.ink,
               ),
             ),
-            const SizedBox(height: 6),
+            const SizedBox(height: 4),
             Text(
               role == KeepRole.tarun
                   ? 'Take the first one from your phone.'
                   : 'New moments will appear here when they arrive.',
               textAlign: TextAlign.center,
-              style: TextStyle(fontSize: 13, color: Oa.mutedFg),
+              style: const TextStyle(fontSize: 13, color: Oa.mutedFg),
             ),
             if (role == KeepRole.tarun) ...[
               const SizedBox(height: 20),
@@ -1118,14 +1207,14 @@ class _SettingsViewState extends State<SettingsView> {
   Widget build(BuildContext context) {
     final connected = widget.device.isConnected;
     return SingleChildScrollView(
-      padding: const EdgeInsets.fromLTRB(16, 8, 16, 104),
+      padding: const EdgeInsets.fromLTRB(20, 12, 20, 104),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(
             children: [
               OaIconButton(
-                icon: Icons.arrow_back_outlined,
+                icon: Icons.chevron_left_rounded,
                 tooltip: 'Back to Home',
                 onPressed: widget.onBack,
               ),
@@ -1133,9 +1222,9 @@ class _SettingsViewState extends State<SettingsView> {
               const Text(
                 'Settings',
                 style: TextStyle(
-                  fontSize: 20,
-                  fontWeight: FontWeight.w500,
-                  letterSpacing: -0.3,
+                  fontSize: 30,
+                  fontWeight: FontWeight.w700,
+                  letterSpacing: -0.6,
                   color: Oa.ink,
                 ),
               ),
@@ -1197,7 +1286,7 @@ class _SettingsViewState extends State<SettingsView> {
                       width: 8,
                       height: 8,
                       decoration: ShapeDecoration(
-                        color: connected ? Oa.successText : Oa.dangerText,
+                        color: connected ? Oa.successText : Oa.mutedFg,
                         shape: const CircleBorder(),
                       ),
                     ),
@@ -1229,24 +1318,63 @@ class _SettingsViewState extends State<SettingsView> {
                         ],
                       ),
                     ),
-                    Text(
-                      connected ? 'ONLINE' : 'OFFLINE',
-                      style: TextStyle(
-                        fontSize: 11,
-                        fontWeight: FontWeight.w500,
-                        letterSpacing: 0.5,
-                        color: connected ? Oa.successText : Oa.dangerText,
-                      ),
+                    OaButton(
+                      label: connected ? 'Check again' : 'Check',
+                      variant: OaButtonVariant.secondary,
+                      size: OaButtonSize.xs,
+                      onPressed: () =>
+                          unawaited(widget.device.probeConnection()),
                     ),
                   ],
                 ),
-                const SizedBox(height: 12),
-                OaButton(
-                  label: connected ? 'Check again' : 'Check connection',
-                  variant: OaButtonVariant.secondary,
-                  expand: true,
-                  onPressed: () => unawaited(widget.device.probeConnection()),
-                ),
+                if (widget.role != KeepRole.monisha) ...[
+                  const SizedBox(height: 12),
+                  const Divider(height: 1, thickness: 1, color: Oa.border),
+                  const SizedBox(height: 12),
+                  Row(
+                    children: [
+                      const Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              'Live capture mode',
+                              style: TextStyle(
+                                fontSize: 14,
+                                fontWeight: FontWeight.w500,
+                                color: Oa.fg80,
+                              ),
+                            ),
+                            SizedBox(height: 2),
+                            Text(
+                              'Show the XIAO camera feed while enabled.',
+                              style: TextStyle(fontSize: 12, color: Oa.mutedFg),
+                            ),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      OaSwitch(
+                        value: _liveCapture,
+                        onChanged: (value) =>
+                            setState(() => _liveCapture = value),
+                      ),
+                    ],
+                  ),
+                  if (_liveCapture && connected && widget.isActive) ...[
+                    const SizedBox(height: 12),
+                    _LivePreview(url: widget.device.streamUrl),
+                  ],
+                  if (connected && widget.isActive) ...[
+                    const SizedBox(height: 12),
+                    OaButton(
+                      label: 'Take photo from XIAO',
+                      loading: _capturing,
+                      expand: true,
+                      onPressed: _capturing ? null : _capturePhoto,
+                    ),
+                  ],
+                ],
               ],
             ),
           ),
@@ -1367,15 +1495,14 @@ class _SettingsViewState extends State<SettingsView> {
                         ),
                       ),
                       const SizedBox(width: 12),
-                      Text(
-                        widget.device.demoMode ? 'RUNNING' : 'STOPPED',
-                        style: TextStyle(
-                          fontSize: 11,
-                          fontWeight: FontWeight.w500,
-                          letterSpacing: 0.5,
+                      Container(
+                        width: 8,
+                        height: 8,
+                        decoration: ShapeDecoration(
                           color: widget.device.demoMode
                               ? Oa.successText
                               : Oa.mutedFg,
+                          shape: const CircleBorder(),
                         ),
                       ),
                     ],
@@ -1417,57 +1544,6 @@ class _SettingsViewState extends State<SettingsView> {
               ),
             ),
           ],
-          const SizedBox(height: 12),
-          OaPanel(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  children: [
-                    const Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            'Live capture mode',
-                            style: TextStyle(
-                              fontSize: 14,
-                              fontWeight: FontWeight.w500,
-                              color: Oa.fg80,
-                            ),
-                          ),
-                          SizedBox(height: 2),
-                          Text(
-                            'Show the XIAO camera feed while enabled.',
-                            style: TextStyle(fontSize: 12, color: Oa.mutedFg),
-                          ),
-                        ],
-                      ),
-                    ),
-                    const SizedBox(width: 12),
-                    OaSwitch(
-                      value: _liveCapture,
-                      onChanged: (value) =>
-                          setState(() => _liveCapture = value),
-                    ),
-                  ],
-                ),
-                if (_liveCapture && connected && widget.isActive) ...[
-                  const SizedBox(height: 12),
-                  _LivePreview(url: widget.device.streamUrl),
-                ],
-                if (connected && widget.isActive) ...[
-                  const SizedBox(height: 12),
-                  OaButton(
-                    label: 'Take photo from XIAO',
-                    loading: _capturing,
-                    expand: true,
-                    onPressed: _capturing ? null : _capturePhoto,
-                  ),
-                ],
-              ],
-            ),
-          ),
           const SizedBox(height: 24),
           const OaSectionHeading(
             'Board Wi-Fi',
@@ -1523,7 +1599,7 @@ class _SettingsViewState extends State<SettingsView> {
                 const SizedBox(height: 8),
                 OaButton(
                   label: 'Reset board Wi-Fi',
-                  variant: OaButtonVariant.secondary,
+                  variant: OaButtonVariant.ghost,
                   loading: _wifiResetting,
                   expand: true,
                   onPressed: !connected || _wifiSaving || _wifiResetting
@@ -2207,13 +2283,13 @@ class _MomentDetailPageState extends State<MomentDetailPage> {
       backgroundColor: Colors.white,
       body: SafeArea(
         child: Padding(
-          padding: const EdgeInsets.fromLTRB(16, 8, 16, 32),
+          padding: const EdgeInsets.fromLTRB(20, 12, 20, 32),
           child: Column(
             children: [
               Row(
                 children: [
                   OaIconButton(
-                    icon: Icons.arrow_back_outlined,
+                    icon: Icons.chevron_left_rounded,
                     tooltip: 'Back',
                     onPressed: () => Navigator.pop(context),
                   ),
@@ -2304,39 +2380,13 @@ class _MomentDetailPageState extends State<MomentDetailPage> {
   Future<void> _delete() async {
     final confirmed = await OaModal.show(
       context,
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const Text(
-            'Delete this photo?',
-            style: TextStyle(
-              fontSize: 15,
-              fontWeight: FontWeight.w500,
-              letterSpacing: -0.2,
-              color: Oa.ink,
-            ),
-          ),
-          const SizedBox(height: 6),
-          Text(
-            widget.moment.remoteId == null
-                ? 'This removes it from this phone.'
-                : 'This removes it from the server and every device.',
-            style: const TextStyle(
-              fontSize: 13,
-              height: 1.45,
-              color: Oa.mutedFg,
-            ),
-          ),
-          OaModalFooter(
-            backLabel: 'Back',
-            actionLabel: 'Delete photo',
-            destructive: true,
-            onBack: () => Navigator.pop(context, false),
-            onAction: () => Navigator.pop(context, true),
-          ),
-        ],
-      ),
+      title: 'Delete this photo?',
+      message: widget.moment.remoteId == null
+          ? 'This removes it from this phone.'
+          : 'This removes it from the server and every device.',
+      backLabel: 'Cancel',
+      actionLabel: 'Delete',
+      destructive: true,
     );
     if (confirmed && mounted) Navigator.pop(context, true);
   }
