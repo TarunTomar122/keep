@@ -1,213 +1,68 @@
 # Keep
 
-Keep is a tiny long-distance photo device for couples.
+A little e-paper frame for sharing everyday moments across distance.
 
-The idea is simple: press a button on a small camera in one place, send the
-photo through the phone, process it into a soft e-ink-friendly style, and show
-it later on an e-ink display in another place.
+<p align="center">
+  <img src="docs/images/keep-frame.png" alt="The finished Keep frame showing a photo captioned near meadows" width="680">
+</p>
 
-```text
-XIAO camera → phone app → server → recipient phone/XIAO → e-ink display
-```
+I built Keep for my long-distance fiancée. A photo taken on the small camera, or chosen on a phone, becomes a quiet image on the frame at the other end. The idea is to make being part of each other's day feel a little more tangible.
 
-## Current status
+**[Watch the story and build on YouTube](https://youtu.be/kkhD97BJ-2o)**
 
-Working now:
+[![Keep camera and e-paper prototype, from the build video](docs/images/keep-build.jpg)](https://youtu.be/kkhD97BJ-2o)
 
-- Seeed XIAO ESP32S3 Sense camera capture.
-- XIAO live camera stream over Wi-Fi.
-- XIAO setup hotspot named `CLIPPY-XIAO`.
-- Save Wi-Fi credentials to the board's flash storage.
-- Station-mode reconnect after reboot.
-- Board status, Wi-Fi reset, mDNS, and UDP discovery.
-- Flutter companion app for Android.
-- Paper/e-ink-inspired Home gallery and Settings screen.
-- Local gallery persistence across app restarts.
-- Original/Treated image detail view with centered header switch.
-- Delete and back actions for gallery images.
-- Phone-side image processing from real image bytes.
-- Local image processing in a background Dart isolate.
-- Runtime resizing, muted palette mapping, grain, edge accents, color
-  quantization, and Floyd–Steinberg dithering.
-- Server-driven gallery: the photo list, originals, and treated variants are
-  fetched from the Keep server (`/photos` and `/photos/{id}/...`) and cached on
-  the phone for offline viewing.
-- Uploads send the original to the server, which generates the treated variant;
-  the gallery and `/view` refresh automatically. Deleting a photo removes it from
-  the server and every device.
-- Syncing, uploading, and deleting show visible spinners and toast feedback.
-- Tested on the Pixel 9 emulator and a real Pixel 6a.
-
-The server, physical capture button, microSD queue, second board, and e-ink
-display are still planned work.
-
-## Product plan
-
-### Phase 1 — capture and process locally
+## How it works
 
 ```text
-XIAO or phone camera
-        ↓
-original image bytes
-        ↓
-phone-side treatment
-        ↓
-original + treated image saved locally
-        ↓
-gallery preview
+XIAO camera or phone photo
+          ↓
+Android app: choose, preview, send
+          ↓
+FastAPI server: store photo and make a six-colour e-paper frame
+          ↓
+Receiver XIAO: fetch latest frame → Waveshare e-paper display
 ```
 
-The current processor is deterministic and model-free so the visual style can
-be tuned quickly against the real e-ink panel. It is a first visual direction,
-not the final AI illustration model.
+The app also shows the shared gallery and can put the latest photo on an Android home-screen widget. The receiver can refresh on a button press or a daily schedule.
 
-### Phase 2 — phone sync
+## Current state
 
-The phone will fetch pending photos from the XIAO, process them locally, and
-upload the original and treated variants when the app is open. Retry and
-background sync can be added after the basic flow is reliable.
+Keep is a working personal prototype. This repository contains the Android app, image server, and firmware that drive the framed display. The photo above shows the finished frame; the video thumbnail shows the earlier wired build.
 
-### Phase 3 — server
+The camera's physical capture button and offline photo queue are still future work. The run commands below cover the app and server; firmware needs a board-specific build.
 
-The server will eventually provide:
+## Repository
 
-- Private image storage.
-- Original and treated image variants.
-- Upload status and retry-safe records.
-- Latest-image retrieval for the recipient device.
-- Style selection and metadata.
-- Authentication for the two-person couple space.
+| Path | What is in it |
+| --- | --- |
+| [`app/`](app/) | Flutter Android app, photo capture, gallery, and widget |
+| [`server/`](server/) | FastAPI API and six-colour image processing |
+| [`firmware/taruns_module/`](firmware/taruns_module/) | XIAO ESP32S3 Sense camera firmware |
+| [`firmware/monishas_module/`](firmware/monishas_module/) | XIAO receiver and Waveshare 3.6-inch e-paper firmware |
 
-There is no Keep image server yet. The backend contract and storage choice are
-the next backend task.
+## Run the app and server
 
-### Phase 4 — physical devices
-
-- Add a physical capture button.
-- Add microSD storage for offline photo queuing.
-- Retry uploads when the phone becomes available.
-- Add the second XIAO and e-ink display.
-- Fetch the latest image and render it for the display's palette and
-  resolution.
-- Let the recipient choose a style later.
-
-## Repository layout
-
-```text
-app/
-  lib/main.dart                 Flutter app and device controls
-  lib/image_processor.dart      On-device image treatment
-  lib/mjpeg_stream.dart         Camera stream parsing
-  lib/audio_stream.dart         Earlier audio transport prototype
-  test/                         Focused Flutter tests
-  assets/demo/                  Local source images
-firmware/
-  media_stream/                 Current Wi-Fi camera firmware
-  wifi_camera/                  Earlier Wi-Fi camera prototype
-  camera_feed/                  Earlier camera feed prototype
-  sense_peripherals/            Sense board peripheral probe
-  mic_probe/                    Microphone probe
-  hello_xiao/                   First board bring-up sketch
-```
-
-## Flutter app
-
-The app talks to a Keep server over HTTP. It ships with the production URL as a
-default; the access token is compiled in at build time too:
+The server needs Python and the app needs Flutter with an Android device or emulator. From the repository root:
 
 ```bash
+cd server
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+KEEP_TOKEN=local-test-token uvicorn app:app --host 127.0.0.1 --port 8400
+```
+
+In another terminal:
+
+```bash
+cd app
 flutter pub get
-flutter analyze
-flutter test
-flutter build apk --release \
-  --dart-define=KEEP_SERVER_URL=http://144.217.6.112:8400 \
-  --dart-define=KEEP_SERVER_TOKEN=<your-bearer-token>
+flutter run \
+  --dart-define=KEEP_SERVER_URL=http://10.0.2.2:8400 \
+  --dart-define=KEEP_SERVER_TOKEN=local-test-token
 ```
 
-The URL and token can also be changed per-device in **Settings → Server**
-(they are stored in secure storage).
+`10.0.2.2` is the Android emulator's route to the host machine. For a physical phone, bind the server to a reachable network interface and use that machine's LAN address. The [receiver firmware](firmware/monishas_module/main.cpp) needs its own server URL and token at build time.
 
-Install on the Pixel 9 emulator:
-
-```bash
-flutter install -d emulator-5554
-```
-
-Install on a connected Android phone:
-
-```bash
-flutter devices
-flutter install -d <device-id>
-```
-
-## Keep server
-
-The server is a FastAPI app (`server/app.py`) served by `uvicorn` on port 8400
-behind a systemd unit (`keep.service`). State lives in `data/`:
-
-- `data/originals/`, `data/processed/`, `data/frames/`, `data/index.json`
-- Token is read from `KEEP_TOKEN` in the service `.env` (default `dev-token`).
-
-Routes (Bearer token required unless noted):
-
-```text
-POST   /upload              Auth. Upload original; server runs the e-ink treatment.
-GET    /photos              Auth. List of moments (newest first).
-GET    /photos/{id}         Auth. One moment record.
-GET    /photos/{id}/original.jpg   Original bytes (public).
-GET    /photos/{id}/processed.png  Treated bytes (public).
-GET    /latest              Auth. Latest raw 120,000-byte e-paper frame
-GET    /view                Latest processed image as a standalone page
-                           (auto-refreshes every 10s).
-DELETE /photos/{id}         Auth. Remove a moment and its files.
-```
-
-`/view` is the recipient's "latest photo" feed. It refreshes automatically as
-photos are uploaded or deleted.
-
-## XIAO firmware
-
-The current sketch is:
-
-```text
-firmware/media_stream/media_stream.ino
-```
-
-The board currently exposes these HTTP routes:
-
-```text
-GET  /status
-GET  /capture
-POST /wifi/config
-POST /wifi/reset
-```
-
-The live camera stream uses port `82`. The board starts its setup hotspot when
-it has no saved Wi-Fi network, then switches to the saved network after
-provisioning and reboot.
-
-## Hardware assumptions
-
-- Seeed XIAO ESP32S3 Sense with camera.
-- Microphone support is deferred.
-- MicroSD is planned but not currently installed.
-- Battery reporting needs a voltage sensor or battery gauge.
-- The board should not be treated as permanently connected to the laptop;
-  phone and firmware testing use the USB connection one at a time.
-
-## Scope note
-
-This standalone repository contains the hardware project: firmware, the
-Flutter companion app, local image processing, assets, and tests. The parent
-Clippy repository has a separate conversation-memory backend; it is not the
-Keep image server and is intentionally not duplicated here.
-
-## Next useful milestone
-
-Tune the on-device treatment using real photos until the result looks right on
-the e-ink display. Then define the minimal upload API and build one complete
-retry-safe path:
-
-```text
-capture → fetch → process → upload → retrieve → display
-```
+The server's original and processed image URLs are currently public. Use test photos when running it outside a trusted network until those routes have access control.
